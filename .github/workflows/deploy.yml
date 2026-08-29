@@ -1,0 +1,88 @@
+# FuelHub Cloud — pipeline CI/CD, punto de entrada (secciones 12/13.5).
+#
+# Va en .github/workflows/deploy.yml del repo. Corre las verificaciones
+# comunes UNA sola vez (no dependen de qué grupo se despliegue), y despacha
+# el despliegue de cada grupo (sección 13) como una invocación independiente
+# de deploy-grupo.yml (workflow reusable, mismo directorio) — dar de alta un
+# grupo nuevo (13.3) se refleja acá agregando su `grupoId` a la lista
+# `matrix.grupo`, nada más.
+#
+# Por qué un workflow reusable y no un solo job con matrix `grupo x ambiente`
+# desplegando dev y prod adentro: GitHub Actions NO correlaciona las
+# instancias de un matrix job con las de otro job que dependa de él vía
+# `needs` — si `deploy-prod` fuera también un matrix job con
+# `needs: deploy-dev`, esperaría a que terminen **TODAS** las instancias de
+# `deploy-dev` (las de todos los grupos), no solo la del mismo grupo. Eso
+# rompería el requisito explícito de la sección 13.5 ("el flujo de un grupo
+# no bloquea ni depende del de otro") — el prod de un grupo quedaría
+# esperando el dev de otro grupo sin ninguna razón real. Con un workflow
+# reusable, cada invocación (una por grupo, vía `strategy.matrix` sobre el
+# job que llama a `uses:`) es un grafo de jobs completamente independiente:
+# el `needs: deploy-dev` de adentro de deploy-grupo.yml solo puede referirse
+# al `deploy-dev` de ESE grupo. No se pudo correr este pipeline de verdad en
+# esta sesión (no hay una cuenta de GitHub Actions real acá) — si al
+# activarlo aparece algún comportamiento distinto al descrito, es el primer
+# lugar para revisar.
+
+name: FuelHub Cloud CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write   # requerido para OIDC hacia AWS (sección 12.5)
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Corre UNA vez (no por grupo) — nada acá depende de qué grupo se despliegue.
+  # ---------------------------------------------------------------------------
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias (workspaces)
+        run: npm ci
+
+      - name: Lint + typecheck
+        run: npm run lint && npm run typecheck
+
+      - name: Tests unitarios (domain/application — sin AWS, sección 7)
+        run: npm run test:unit
+
+      - name: Lint del contrato OpenAPI (sección 11)
+        run: npx @redocly/cli lint openapi.yaml
+
+  # ---------------------------------------------------------------------------
+  # Matriz grupo×ambiente (sección 13.5) — una invocación independiente de
+  # deploy-grupo.yml por cada grupo dado de alta (13.3). El `ambiente` (dev/
+  # prod) se resuelve DENTRO de deploy-grupo.yml, no acá — ver el porqué en
+  # la nota de cabecera de este archivo.
+  # ---------------------------------------------------------------------------
+  pipeline:
+    needs: verify
+    strategy:
+      fail-fast: false   # que el pipeline de un grupo falle no cancela el de otro (13.5)
+      matrix:
+        grupo:
+          - nonato
+          # Agregar acá el `grupoId` de cada grupo nuevo dado de alta (13.3,
+          # Fase 3) — antes de agregarlo, confirmar que ya tiene su entrada
+          # en USER_POOL_ID_POR_GRUPO (infra/lib/stacks/auth-stack.ts) y sus
+          # 2 GitHub Environments (dev-<grupo>/prod-<grupo>, ver la nota de
+          # cabecera de deploy-grupo.yml) ya creados — si no, el job `synth`
+          # de ese grupo falla explícitamente (ver v1.42) y `deploy-dev`
+          # nunca encuentra el Environment.
+    uses: ./.github/workflows/deploy-grupo.yml
+    with:
+      grupo: ${{ matrix.grupo }}
+    secrets: inherit

@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["node", "jest"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@fuelhub/shared-kernel": ["packages/shared-kernel/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/shared-kernel/src/**/*.ts",
+    "services/consulta-cierres/src/**/*.ts",
+    "services/consulta-cierre-detalle/src/**/*.ts",
+    "services/ingest-cierre-turno/src/**/*.ts",
+    "services/ingest-cierre-dia/src/**/*.ts",
+    "services/ingest-compra/src/**/*.ts",
+    "services/admin-tanques/src/**/*.ts",
+    "services/consulta-reportes/src/**/*.ts",
+    "services/auth-pre-token-generation/src/**/*.ts",
+    "infra/lib/constructs/**/*.ts",
+    "infra/lib/stacks/**/*.ts",
+    "infra/bin/**/*.ts"
+  ]
+}

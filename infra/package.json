@@ -1,0 +1,23 @@
+{
+  "name": "fuelhub-infra",
+  "private": true,
+  "version": "0.0.0",
+  "description": "App real de CDK (sección 6.1/12) — network-stack, data-stack, auth-stack, api-stack. Se despliega con `cdk deploy --all -c grupoId=<id> -c ambiente=<dev|prod>` (sección 13.2). Requiere credenciales de AWS configuradas (`aws configure` / variables de entorno) y la cuenta ya \"bootstrapeada\" para CDK (`npx cdk bootstrap`).",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "synth": "cdk synth --all",
+    "diff": "cdk diff --all",
+    "deploy": "cdk deploy --all"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.15",
+    "esbuild": "^0.28.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "aws-cdk": "^2.267.0",
+    "aws-cdk-lib": "^2.267.0",
+    "constructs": "^10.8.1"
+  }
+}

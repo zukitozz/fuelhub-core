@@ -1,0 +1,900 @@
+openapi: 3.0.3
+info:
+  title: FuelHub Cloud API
+  description: >
+    API de ingesta y consulta de cierres de turno/día, compras y tanques para las
+    estaciones de servicio (grifos) del negocio. Consumida exclusivamente
+    sistema-a-sistema (M2M) vía OAuth2 Client Credentials sobre Amazon Cognito —
+    ver sección 5 del documento de especificación técnica (specs-cierres-grifo-backend.md).
+
+    Convención de la API: todos los cuerpos JSON (request y response) usan
+    **camelCase**. El modelo de datos interno (PostgreSQL) usa snake_case en
+    español (ver sección 3) — el mapeo entre ambos ocurre en la capa
+    `infrastructure/http` de cada microservicio (sección 4), nunca se expone el
+    nombre de columna de la base de datos tal cual en el contrato público.
+  version: "1.0.0"
+  contact:
+    name: FuelHub Cloud — Grupo Nonato
+  license:
+    name: Uso interno — no distribuir
+servers:
+  - url: https://api.fuelhub.cloud/v1
+    description: Producción (dominio ilustrativo — reemplazar por el dominio real de API Gateway/Route53 cuando se despliegue)
+
+tags:
+  - name: cierres-turno
+    description: Registro y consulta de cierres de turno (ingest-cierre-turno, consulta-cierres, consulta-cierre-detalle)
+  - name: cierres-dia
+    description: Registro y consulta de cierres de día (ingest-cierre-dia, consulta-cierres)
+  - name: compras
+    description: Registro de abastecimiento/compras (ingest-compra)
+  - name: tanques
+    description: Consulta y reasignación de tanques por estación (admin-tanques) — el alta es precarga, no un endpoint (sección 3.8.4)
+  - name: reportes
+    description: Reportes de negocio agregados (consulta-reportes)
+
+security:
+  - cognitoM2M: []
+
+components:
+  securitySchemes:
+    cognitoM2M:
+      type: oauth2
+      description: >
+        OAuth2 Client Credentials Grant contra el User Pool de Cognito
+        (sección 5.1). Cada estación tiene su propio App Client con 3 scopes:
+        fuelhub-api/cierres.write, fuelhub-api/cierres.read y un scope exclusivo
+        fuelhub-api/station.<CODIGO> que el Pre Token Generation Lambda (9.2.2)
+        usa para derivar custom:role/custom:station_scope — esos claims no son
+        scopes de autorización de API Gateway, se validan a nivel de aplicación
+        (sección 5.4).
+      flows:
+        clientCredentials:
+          tokenUrl: https://us-east-2nq1gjcb0j.auth.us-east-2.amazoncognito.com/oauth2/token
+          scopes:
+            fuelhub-api/cierres.write: Registrar cierres, compras y tanques
+            fuelhub-api/cierres.read: Consultar cierres, tanques y reportes
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >
+        UUID v4 generado una vez por intento lógico de operación (sección 2.3).
+        Reintentos con la misma key devuelven la respuesta cacheada del primer
+        intento exitoso, sin repetir el efecto en la base de datos.
+      schema:
+        type: string
+        format: uuid
+      example: "b3f1c2a4-6e8d-4a3b-9c1e-2f5a7d9b0c3e"
+    FechaDesde:
+      name: fechaDesde
+      in: query
+      required: false
+      description: Filtro de fecha de negocio, inicio del rango (inclusive).
+      schema:
+        type: string
+        format: date
+      example: "2026-08-01"
+    FechaHasta:
+      name: fechaHasta
+      in: query
+      required: false
+      description: Filtro de fecha de negocio, fin del rango (inclusive).
+      schema:
+        type: string
+        format: date
+      example: "2026-08-31"
+    EstacionCodigo:
+      name: estacionCodigo
+      in: query
+      required: false
+      description: >
+        Código de estación a filtrar. Un cliente M2M solo puede consultar su
+        propia estación (validado contra custom:station_scope, sección 5.4) —
+        se omite o debe coincidir con la estación del token; enviar el código
+        de otra estación responde 403.
+      schema:
+        type: string
+      example: "CHANCAYLLO"
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Número de página, base 1.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      description: Cantidad de resultados por página.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Código de error estable, para manejo programático.
+          example: "PRODUCTO_ID_NO_RECONOCIDO"
+        message:
+          type: string
+          description: Mensaje legible para logs/soporte — no traducir en el cliente, solo mostrar/loguear.
+          example: "producto_id no reconocido — ver catálogo oficial"
+        details:
+          type: array
+          description: Errores de validación por campo, cuando aplica (p. ej. 400 de un body con múltiples problemas).
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: "detalle[0].productoId"
+              issue:
+                type: string
+                example: "no existe en productos_maestro o no está activo"
+
+    Empleado:
+      type: object
+      required: [codigo, nombre]
+      description: Operador o administrador que reporta el cierre — auto-provisioning en `usuarios` (sección 3.7).
+      properties:
+        codigo:
+          type: string
+          description: Mapea a `usuarios.usuario` — único por estación (sección 9.7).
+          example: "EMP-014"
+        nombre:
+          type: string
+          example: "Juan Pérez"
+
+    Pago:
+      type: object
+      required: [medio, monto]
+      properties:
+        medio:
+          type: string
+          enum: [EFECTIVO, TARJETA, YAPE]
+          description: Extensible — ver sección 3.5. Otros valores se aceptan como texto libre a nivel de columna, pero estos tres son los confirmados hoy.
+        monto:
+          type: number
+          format: double
+          minimum: 0
+          example: 3100.00
+
+    DetalleLinea:
+      type: object
+      required: [codigoLocal, producto, totalCantidad, totalSoles]
+      description: >
+        Línea de venta por producto en un cierre de turno (sección 3.9, 3.8.1.1).
+        `productoId` es obligatorio solo si el producto vendido es uno de los 5
+        del catálogo cruzado (sección 3.8.1); se omite para balón de gas,
+        mercadito, etc.
+      properties:
+        productoId:
+          type: string
+          format: uuid
+          nullable: true
+          description: UUID fijo del catálogo `productos_maestro` (sección 3.8.1) — omitir si el producto no forma parte del catálogo cruzado.
+          example: "e032f8dc-af1e-44a2-851d-e0e6be27a223"
+        codigoLocal:
+          type: string
+          description: Código interno del POS de la estación — nunca se valida contra ningún catálogo.
+          example: "GAS90"
+        producto:
+          type: string
+          example: "Gasohol 90 (Regular)"
+        medida:
+          type: string
+          example: "GAL"
+        totalCantidad:
+          type: number
+          example: 420.500
+        totalSoles:
+          type: number
+          example: 3153.75
+        calibracionCantidad:
+          type: number
+          nullable: true
+        calibracionSoles:
+          type: number
+          nullable: true
+        despachoCantidad:
+          type: number
+          nullable: true
+        despachoSoles:
+          type: number
+          nullable: true
+
+    CierreTurnoInput:
+      type: object
+      required: [codigoEstacion, turno, fechaNegocio, fechaInicio, fecha, total, empleado, pagos, detalle]
+      properties:
+        codigoEstacion:
+          type: string
+          description: Se resuelve a `estacion_id` y se valida contra `custom:station_scope` del JWT (sección 5.4).
+          example: "CHANCAYLLO"
+        isla:
+          type: string
+          nullable: true
+          example: "ISLA-1"
+        turno:
+          type: string
+          enum: [TURNO1, TURNO2, TURNO3]
+        fechaNegocio:
+          type: string
+          format: date
+          example: "2026-08-22"
+        fechaInicio:
+          type: string
+          format: date-time
+          description: Hora real de ingreso del operador — requerido, debe ser anterior a `fecha` (sección 3.4.2).
+          example: "2026-08-22T06:00:00-05:00"
+        fecha:
+          type: string
+          format: date-time
+          description: Hora real de cierre/salida del operador.
+          example: "2026-08-22T14:05:00-05:00"
+        total:
+          type: number
+          example: 4820.50
+        facturasEmitidas:
+          type: integer
+          default: 0
+          description: Indicador anti-fraude (sección 3.4.1).
+        empleado:
+          $ref: '#/components/schemas/Empleado'
+        pagos:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Pago'
+        detalle:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/DetalleLinea'
+
+    CierreTurnoResumen:
+      type: object
+      description: Forma resumida usada en listados (GET /cierres-turno) — sin `detalle`/`pagos` completos.
+      properties:
+        id:
+          type: string
+          format: uuid
+        codigoEstacion:
+          type: string
+        isla:
+          type: string
+          nullable: true
+        turno:
+          type: string
+          enum: [TURNO1, TURNO2, TURNO3]
+        fechaNegocio:
+          type: string
+          format: date
+        fechaInicio:
+          type: string
+          format: date-time
+        fecha:
+          type: string
+          format: date-time
+        total:
+          type: number
+        estado:
+          type: string
+          enum: [ACTIVO, ANULADO]
+        empleado:
+          $ref: '#/components/schemas/Empleado'
+        recibidoEn:
+          type: string
+          format: date-time
+
+    CierreTurnoDetalleCompleto:
+      description: Forma completa usada en GET /cierres-turno/{id}.
+      allOf:
+        - $ref: '#/components/schemas/CierreTurnoResumen'
+        - type: object
+          properties:
+            cierreDiaId:
+              type: string
+              format: uuid
+              nullable: true
+            facturasEmitidas:
+              type: integer
+            clienteOrigen:
+              type: string
+              description: client_id de Cognito que envió el cierre (sección 3.10).
+            pagos:
+              type: array
+              items:
+                $ref: '#/components/schemas/Pago'
+            detalle:
+              type: array
+              items:
+                $ref: '#/components/schemas/DetalleLinea'
+
+    CierreDiaInput:
+      type: object
+      required: [codigoEstacion, fechaNegocio, fecha, total, administrador]
+      properties:
+        codigoEstacion:
+          type: string
+          example: "CHANCAYLLO"
+        isla:
+          type: string
+          nullable: true
+        fechaNegocio:
+          type: string
+          format: date
+        fecha:
+          type: string
+          format: date-time
+        total:
+          type: number
+        administrador:
+          allOf:
+            - $ref: '#/components/schemas/Empleado'
+          description: Se auto-provisiona en `usuarios` con `rol = ADMINISTRADOR` (sección 3.7.1) — distinto del operador de cada turno.
+
+    CierreDiaResumen:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        codigoEstacion:
+          type: string
+        isla:
+          type: string
+          nullable: true
+        fechaNegocio:
+          type: string
+          format: date
+        fecha:
+          type: string
+          format: date-time
+        total:
+          type: number
+        estado:
+          type: string
+          enum: [ACTIVO, ANULADO]
+        administrador:
+          $ref: '#/components/schemas/Empleado'
+        recibidoEn:
+          type: string
+          format: date-time
+
+    CompraInput:
+      type: object
+      required: [codigoEstacion, productoId, fecha, cantidad, costoUnitario]
+      properties:
+        codigoEstacion:
+          type: string
+          example: "CHANCAYLLO"
+        tanqueId:
+          type: string
+          format: uuid
+          nullable: true
+          description: A qué tanque ingresó — opcional (sección 3.3).
+        productoId:
+          type: string
+          format: uuid
+          description: Obligatorio siempre en compras (sección 3.8.1) — a diferencia del detalle de cierre.
+          example: "f7ec806f-0e5c-4949-8110-b48469fd3ecf"
+        proveedor:
+          type: string
+          nullable: true
+        fecha:
+          type: string
+          format: date-time
+        cantidad:
+          type: number
+          description: En la unidad de `productos_maestro.medida` del producto comprado (GAL o LT) — sección 3.3.
+          example: 3000.000
+        costoUnitario:
+          type: number
+          example: 14.250
+        numeroGuia:
+          type: string
+          nullable: true
+
+    CompraOutput:
+      allOf:
+        - $ref: '#/components/schemas/CompraInput'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            costoTotal:
+              type: number
+              description: Columna generada (`cantidad * costoUnitario`) — sección 3.3.
+            creadoEn:
+              type: string
+              format: date-time
+
+    TanqueUpdateInput:
+      type: object
+      description: >
+        PUT parcial — típicamente usado para reasignar `productoId` cuando el
+        tanque cambia de producto según demanda (sección 3.8.3), pero también
+        permite ajustar capacidad/stock mínimo/estado.
+      properties:
+        productoId:
+          type: string
+          format: uuid
+          description: Si cambia respecto al valor actual, el backend actualiza `producto_asignado_en` a la hora del request (sección 3.3).
+        capacidad:
+          type: number
+        stockMinimo:
+          type: number
+          nullable: true
+        activo:
+          type: boolean
+
+    TanqueOutput:
+      type: object
+      description: >
+        Los tanques se precargan por estación (sección 3.8.4) — no hay
+        `TanqueInput`/`POST /tanques` en este contrato, solo lectura
+        (`GET /tanques`) y actualización (`PUT /tanques/{id}`).
+      properties:
+        id:
+          type: string
+          format: uuid
+        codigoEstacion:
+          type: string
+          example: "CHANCAYLLO"
+        productoId:
+          type: string
+          format: uuid
+          example: "f7ec806f-0e5c-4949-8110-b48469fd3ecf"
+        nombre:
+          type: string
+          example: "Tanque 1"
+        capacidad:
+          type: number
+          description: En la unidad de `productos_maestro.medida` del producto asignado.
+          example: 10000.00
+        stockMinimo:
+          type: number
+          nullable: true
+        productoAsignadoEn:
+          type: string
+          format: date-time
+        activo:
+          type: boolean
+        creadoEn:
+          type: string
+          format: date-time
+
+    ReporteMargenItem:
+      type: object
+      description: Fila del reporte de margen por sede (sección 3.8.2.b).
+      properties:
+        estacion:
+          type: string
+        ingresosTotales:
+          type: number
+        costoVentasEstimado:
+          type: number
+        margenEstimado:
+          type: number
+
+    ReporteAbastecimientoItem:
+      type: object
+      description: Fila del reporte de autonomía vs. frecuencia real de abastecimiento (sección 3.8.2.c).
+      properties:
+        estacion:
+          type: string
+        tanque:
+          type: string
+        producto:
+          type: string
+        capacidad:
+          type: number
+        ventaPromedioDiaria:
+          type: number
+          nullable: true
+        diasDeAutonomiaEstimados:
+          type: number
+          nullable: true
+        frecuenciaRealDias:
+          type: number
+          nullable: true
+        enRiesgo:
+          type: boolean
+          description: true cuando frecuenciaRealDias > diasDeAutonomiaEstimados (sección 3.8.2.c).
+
+    Paginacion:
+      type: object
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        totalItems:
+          type: integer
+        totalPages:
+          type: integer
+
+  responses:
+    BadRequest:
+      description: Validación de negocio o de esquema fallida (turno inválido, fecha <= fechaInicio, productoId no reconocido, etc. — sección 3.9/3.8.1).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Token ausente, expirado o inválido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: >
+        Token válido pero sin el scope requerido, o `codigoEstacion`/`estacionCodigo`
+        del payload/query no coincide con `custom:station_scope` del token
+        (sección 5.4) — nunca se confía en que el payload diga la verdad por sí solo.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: >
+        `Idempotency-Key` reutilizada con un body distinto al del primer intento
+        (colisión real, no un reintento legítimo — sección 2.3), o violación de
+        una restricción única (p. ej. `usuario` ya existe en otra estación, sección 3.7).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Recurso no encontrado.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+paths:
+  /cierres-turno:
+    post:
+      tags: [cierres-turno]
+      summary: Registrar un cierre de turno
+      description: Idempotente vía header `Idempotency-Key` (sección 2.3). Lambda `ingest-cierre-turno`.
+      operationId: registrarCierreTurno
+      x-required-scope: fuelhub-api/cierres.write
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CierreTurnoInput'
+      responses:
+        '201':
+          description: Cierre de turno registrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CierreTurnoDetalleCompleto'
+        '200':
+          description: Reintento con la misma `Idempotency-Key` — devuelve la respuesta cacheada del primer intento (sección 2.3), sin volver a insertar.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CierreTurnoDetalleCompleto'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [cierres-turno]
+      summary: Listar/consultar cierres de turno
+      description: >
+        Filtros por estación, rango de fechas y demás (sección 3.4 — incluye
+        "quiénes trabajaron el día X"). Lambda `consulta-cierres`.
+      operationId: listarCierresTurno
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/EstacionCodigo'
+        - $ref: '#/components/parameters/FechaDesde'
+        - $ref: '#/components/parameters/FechaHasta'
+        - name: turno
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [TURNO1, TURNO2, TURNO3]
+        - name: usuarioCodigo
+          in: query
+          required: false
+          description: Filtra por `empleado.codigo` — para "quién trabajó el día X" (sección 3.4).
+          schema:
+            type: string
+        - name: estado
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVO, ANULADO]
+            default: ACTIVO
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Listado paginado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CierreTurnoResumen'
+                  pagination:
+                    $ref: '#/components/schemas/Paginacion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /cierres-turno/{id}:
+    get:
+      tags: [cierres-turno]
+      summary: Detalle de un cierre de turno
+      description: Incluye `pagos[]` y `detalle[]` completos. Lambda `consulta-cierre-detalle`.
+      operationId: obtenerCierreTurno
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Detalle del cierre.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CierreTurnoDetalleCompleto'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /cierres-dia:
+    post:
+      tags: [cierres-dia]
+      summary: Registrar un cierre de día
+      description: >
+        Idempotente igual que cierres-turno (sección 2.3). Tras el INSERT exitoso,
+        publica el evento `CierreDiaRegistrado` a EventBridge (sección 4.1) para el
+        servicio independiente de notificaciones. Lambda `ingest-cierre-dia`.
+      operationId: registrarCierreDia
+      x-required-scope: fuelhub-api/cierres.write
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CierreDiaInput'
+      responses:
+        '201':
+          description: Cierre de día registrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CierreDiaResumen'
+        '200':
+          description: Reintento con la misma `Idempotency-Key` — respuesta cacheada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CierreDiaResumen'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [cierres-dia]
+      summary: Listar/consultar cierres de día
+      operationId: listarCierresDia
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/EstacionCodigo'
+        - $ref: '#/components/parameters/FechaDesde'
+        - $ref: '#/components/parameters/FechaHasta'
+        - name: estado
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVO, ANULADO]
+            default: ACTIVO
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Listado paginado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CierreDiaResumen'
+                  pagination:
+                    $ref: '#/components/schemas/Paginacion'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /compras:
+    post:
+      tags: [compras]
+      summary: Registrar una compra/abastecimiento
+      description: >
+        No es idempotente por header (bajo volumen, sin reintentos automáticos
+        esperados) — `productoId` es siempre obligatorio y validado (sección
+        3.8.1). Lambda `ingest-compra`.
+      operationId: registrarCompra
+      x-required-scope: fuelhub-api/cierres.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompraInput'
+      responses:
+        '201':
+          description: Compra registrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompraOutput'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /tanques:
+    get:
+      tags: [tanques]
+      summary: Listar tanques de una estación
+      operationId: listarTanques
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/EstacionCodigo'
+      responses:
+        '200':
+          description: Listado de tanques.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TanqueOutput'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /tanques/{id}:
+    put:
+      tags: [tanques]
+      summary: Actualizar un tanque (incluye reasignación de producto)
+      description: >
+        Usado en particular para reasignar `productoId` cuando el tanque cambia
+        de producto según demanda (sección 3.8.3) — el backend actualiza
+        `producto_asignado_en` automáticamente cuando `productoId` cambia.
+        Lambda `admin-tanques`.
+      operationId: actualizarTanque
+      x-required-scope: fuelhub-api/cierres.write
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TanqueUpdateInput'
+      responses:
+        '200':
+          description: Tanque actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TanqueOutput'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reportes/margen:
+    get:
+      tags: [reportes]
+      summary: Margen estimado por sede
+      description: Sección 3.8.2.b — costo promedio ponderado de compras del período vs. ingresos por despacho. Lambda `consulta-reportes`.
+      operationId: obtenerReporteMargen
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/FechaDesde'
+        - $ref: '#/components/parameters/FechaHasta'
+        - $ref: '#/components/parameters/EstacionCodigo'
+      responses:
+        '200':
+          description: Reporte de margen por estación.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReporteMargenItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /reportes/abastecimiento:
+    get:
+      tags: [reportes]
+      summary: Autonomía de tanques vs. frecuencia real de abastecimiento
+      description: Sección 3.8.2.c — ordenado por caso más urgente primero (`enRiesgo` true). Lambda `consulta-reportes`.
+      operationId: obtenerReporteAbastecimiento
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/EstacionCodigo'
+      responses:
+        '200':
+          description: Reporte de abastecimiento por tanque.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReporteAbastecimientoItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'

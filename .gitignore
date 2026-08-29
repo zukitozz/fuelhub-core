@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+infra/node_modules/
+infra/package-lock.json
+infra/cdk.out/
+*.tsbuildinfo
+.DS_Store

@@ -1,0 +1,180 @@
+# FuelHub Cloud — pipeline de UN grupo (secciones 12.2/12.3/13.3), invocado
+# por deploy.yml (mismo directorio) una vez por cada `grupoId` de su matriz.
+# Contiene la secuencia synth → dev → prod para un solo grupo, así el
+# `needs` entre jobs de este archivo nunca cruza con el de otro grupo — ver
+# la nota de cabecera de deploy.yml para el porqué de este diseño.
+#
+# Requiere, configurado de antemano UNA VEZ POR GRUPO (sección 13.3, Fase
+# 2/3 — no algo que este workflow automatice):
+#   - Dos GitHub Environments por grupo: `dev-<grupo>` y `prod-<grupo>` (p.
+#     ej. `dev-nonato`/`prod-nonato`) — `prod-<grupo>` con "required
+#     reviewers" activado (Settings → Environments): es el gate de
+#     aprobación de 12.3/13.5, independiente por grupo porque cada uno es un
+#     Environment de GitHub distinto (aprobar el prod de un grupo no aprueba
+#     el de otro).
+#   - En cada uno de esos 2 Environments, los secrets
+#     SMOKE_TEST_CLIENT_ID/SMOKE_TEST_CLIENT_SECRET — credenciales del App
+#     Client de pruebas de ESE grupo/ambiente (nunca las de una estación
+#     real, sección 12.5; ver 13.3 Fase 2 sobre cómo se crea ese cliente).
+#
+# AWS_DEPLOY_ROLE_ARN se lee como secret de repo (no de Environment) porque
+# hoy todos los grupos comparten una sola cuenta de AWS (sección 12.1) — si
+# en el futuro se decide un rol de IAM propio por grupo (más aislamiento
+# todavía, en línea con 13.1), alcanza con mover este secret a cada
+# Environment; el resto del workflow no cambia, ya lee `secrets.*` en el
+# contexto del job, que ya resuelve Environment antes que repo.
+
+name: FuelHub Cloud — despliegue por grupo
+
+on:
+  workflow_call:
+    inputs:
+      grupo:
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Corre en PR y en push a main — valida los 4 stacks de ESTE grupo contra
+  # `dev` Y contra `prod` (dos contextos de CDK distintos, sección 13.2), sin
+  # desplegar nada. Atrapa en CI el tipo de error que en v1.42 solo apareció
+  # corriendo `cdk synth` de verdad (p. ej. AuthStack lanza `Error` si el
+  # grupoId todavía no tiene entrada en USER_POOL_ID_POR_GRUPO — ver 13.3,
+  # Fase 1) en vez de descubrirse recién en un despliegue real.
+  # ---------------------------------------------------------------------------
+  synth:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ambiente: [dev, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias (raíz — projectRoot de esbuild, ver v1.42)
+        run: npm ci
+
+      - name: Instalar dependencias (infra/)
+        run: npm ci
+        working-directory: infra
+
+      - name: cdk synth (grupo=${{ inputs.grupo }}, ambiente=${{ matrix.ambiente }})
+        run: npx cdk synth --all -c grupoId=${{ inputs.grupo }} -c ambiente=${{ matrix.ambiente }}
+        working-directory: infra
+
+  # ---------------------------------------------------------------------------
+  # Solo en push a main — despliega `dev` de este grupo automáticamente.
+  # Orden explícito de la sección 12.2, actualizado en v1.42 con network-stack:
+  # network → data → migraciones → auth → api.
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    needs: synth
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev-${{ inputs.grupo }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+
+      - name: Autenticar contra AWS vía OIDC (sección 12.5)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+
+      - name: Desplegar network-stack (VPC mínima sin NAT, sección 9.4/v1.42)
+        run: npx cdk deploy "FuelHubNetworkStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Desplegar data-stack
+        run: npx cdk deploy "FuelHubDataStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Correr migraciones de esquema (node-pg-migrate — sección 12.4)
+        run: npm run db:migrate -- --grupo ${{ inputs.grupo }} --env dev
+
+      - name: Desplegar auth-stack (Cognito importado, no recreado — sección 12.2/13.3)
+        run: npx cdk deploy "FuelHubAuthStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Desplegar api-stack
+        run: npx cdk deploy "FuelHubApiStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Tests de integración (adaptadores contra dev/localstack)
+        run: npm run test:integration -- --grupo ${{ inputs.grupo }} --env dev
+
+      - name: Smoke test — token M2M real + POST/GET de prueba (sección 12.3)
+        run: npm run smoke-test -- --grupo ${{ inputs.grupo }} --env dev
+        env:
+          SMOKE_TEST_CLIENT_ID: ${{ secrets.SMOKE_TEST_CLIENT_ID }}
+          SMOKE_TEST_CLIENT_SECRET: ${{ secrets.SMOKE_TEST_CLIENT_SECRET }}
+
+  # ---------------------------------------------------------------------------
+  # Requiere aprobación manual — Environment `prod-<grupo>` con "required
+  # reviewers" propio: gate independiente por grupo (sección 13.5), nunca
+  # corre solo porque hubo un push.
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    needs: deploy-dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod-${{ inputs.grupo }}   # <- gate de aprobación de ESTE grupo únicamente
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+
+      - name: Autenticar contra AWS vía OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+
+      - name: Desplegar network-stack
+        run: npx cdk deploy "FuelHubNetworkStack-${{ inputs.grupo }}-prod" -c grupoId=${{ inputs.grupo }} -c ambiente=prod --require-approval never
+        working-directory: infra
+
+      - name: Desplegar data-stack
+        run: npx cdk deploy "FuelHubDataStack-${{ inputs.grupo }}-prod" -c grupoId=${{ inputs.grupo }} -c ambiente=prod --require-approval never
+        working-directory: infra
+
+      - name: Correr migraciones de esquema (node-pg-migrate)
+        run: npm run db:migrate -- --grupo ${{ inputs.grupo }} --env prod
+
+      - name: Desplegar auth-stack (User Pool real, importado — sección 9.2.1/13.3)
+        run: npx cdk deploy "FuelHubAuthStack-${{ inputs.grupo }}-prod" -c grupoId=${{ inputs.grupo }} -c ambiente=prod --require-approval never
+        working-directory: infra
+
+      - name: Desplegar api-stack
+        run: npx cdk deploy "FuelHubApiStack-${{ inputs.grupo }}-prod" -c grupoId=${{ inputs.grupo }} -c ambiente=prod --require-approval never
+        working-directory: infra
+
+      - name: Smoke test final contra prod
+        run: npm run smoke-test -- --grupo ${{ inputs.grupo }} --env prod
+        env:
+          SMOKE_TEST_CLIENT_ID: ${{ secrets.SMOKE_TEST_CLIENT_ID }}
+          SMOKE_TEST_CLIENT_SECRET: ${{ secrets.SMOKE_TEST_CLIENT_SECRET }}
