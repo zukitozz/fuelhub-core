@@ -47,6 +47,20 @@
 # IAM valida el certificado real de GitHub contra su propia lista de
 # proveedores conocidos y no depende de este valor para decidir la
 # confianza, asi que no hace falta que sea el "hash exacto" de nada.
+#
+# IMPORTANTE (v1.51, descubierto con el primer deploy real): el claim "sub"
+# del token OIDC NO siempre es "repo:OWNER/REPO:environment:NOMBRE". Si la
+# cuenta de GitHub o el repo fueron renombrados alguna vez en su historia,
+# GitHub le agrega el ID interno inmutable de cada uno, con la forma
+# "repo:OWNER@ID_OWNER/REPO@ID_REPO:environment:NOMBRE" -- es una proteccion
+# de GitHub para que, si alguien registra despues el nombre viejo, no pueda
+# fabricar un token que matchee una trust policy vieja basada solo en el
+# nombre. Se confirmo esto imprimiendo el token real en un paso de
+# diagnostico temporal del workflow (ver deploy-grupo.yml, retirado despues
+# de esta correccion) -- el sub real fue
+# "repo:zukitozz@212289646/fuelhub-core@1350969551:environment:dev-nonato".
+# Por eso GitHubOrgId/GitHubRepoId abajo son parte del "nombre" real que hay
+# que matchear, no datos opcionales.
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
@@ -64,6 +78,24 @@ Parameters:
     Type: String
     Default: fuelhub-core
     Description: Nombre del repo (sin el org/usuario delante).
+
+  GitHubOrgId:
+    Type: String
+    Default: '212289646'
+    Description: >-
+      ID interno inmutable de la cuenta/organizacion de GitHub (numerico).
+      GitHub lo agrega al claim "sub" del token OIDC como OWNER@ID cuando la
+      cuenta fue renombrada alguna vez -- ver el comentario grande al inicio
+      del archivo. Se obtiene imprimiendo el token real (paso de diagnostico
+      temporal) o vía GET /users/<usuario> de la API de GitHub (campo "id").
+
+  GitHubRepoId:
+    Type: String
+    Default: '1350969551'
+    Description: >-
+      ID interno inmutable del repo (numerico), mismo motivo que
+      GitHubOrgId. Se obtiene vía GET /repos/<owner>/<repo> de la API de
+      GitHub (campo "id").
 
   CdkQualifier:
     Type: String
@@ -135,7 +167,10 @@ Resources:
                 # llama a configure-aws-credentials. El wildcard final cubre
                 # cualquier grupo futuro (13.3) sin tener que volver a tocar
                 # este rol cada vez que se da de alta uno nuevo.
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:*'
+                #
+                # OWNER@ID_OWNER/REPO@ID_REPO, no OWNER/REPO a secas -- ver
+                # el comentario grande al inicio del archivo (v1.51).
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}@${GitHubOrgId}/${GitHubRepo}@${GitHubRepoId}:environment:*'
       Policies:
         - PolicyName: AsumirRolesToolkitCDK
           PolicyDocument:
