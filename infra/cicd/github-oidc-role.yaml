@@ -183,6 +183,42 @@ Resources:
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-us-east-2'
                   - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-us-east-2'
 
+        # AGREGADO v1.51 -- descubierto en el primer despliegue real: los
+        # scripts de scripts/db-migrate.mjs y scripts/test-integration.mjs
+        # (12.4/12.6) NO corren por dentro de `cdk deploy` -- son procesos
+        # Node sueltos que este mismo rol ejecuta directamente en
+        # deploy-grupo.yml, DESPUES de que `cdk deploy` termino. Usan sus
+        # propias llamadas de AWS SDK (CloudFormation DescribeStacks para
+        # leer los Outputs de DataStack, y RDS Data API para correr SQL) con
+        # las credenciales de ESTE rol, no las del toolkit de CDK -- por eso
+        # necesitan su propio permiso, aparte del de arriba.
+        #
+        # Acotado por el prefijo "fuelhub-"/"fuelhub/" fijo que ahora tienen
+        # el nombre del stack, el clusterIdentifier y el secretName (ver
+        # infra/lib/stacks/data-stack.ts) -- nunca un wildcard abierto a toda
+        # la cuenta, que tambien tiene Aurora/secrets de otros proyectos de
+        # Jorge sin relacion con FuelHub.
+        - PolicyName: LeerYMigrarDatosPropios
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/FuelHub*/*'
+
+              - Effect: Allow
+                Action:
+                  - rds-data:ExecuteStatement
+                  - rds-data:BatchExecuteStatement
+                  - rds-data:BeginTransaction
+                  - rds-data:CommitTransaction
+                  - rds-data:RollbackTransaction
+                Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:fuelhub-*'
+
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:fuelhub/*'
+
 Outputs:
   DeployRoleArn:
     Description: >-

@@ -42,7 +42,22 @@ export class DataStack extends Stack {
     // estado (Lambdas, API Gateway) y no necesita esta protección.
     const removalPolicy = props.ambiente === 'prod' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
 
+    // Identificador y nombre de secret FIJOS (v1.51), no autogenerados por
+    // CDK. Antes de esto, el ARN del cluster y del secret solo se conocían
+    // DESPUÉS de desplegar (sufijo aleatorio de CDK) — eso hacía imposible
+    // darle a FuelHubGitHubActionsDeployRole permisos de rds-data/
+    // secretsmanager acotados a solo los recursos de FuelHub, sin abrirlos a
+    // los de otros proyectos que comparten esta misma cuenta de AWS (ver
+    // infra/cicd/github-oidc-role.yaml). Con el prefijo "fuelhub-"/"fuelhub/"
+    // fijo, esa trust policy puede acotarse por patrón sin adivinar nada.
+    // Forzó el reemplazo del cluster de dev en el primer despliegue real de
+    // v1.51 — aceptable ahí porque las migraciones ni habían corrido
+    // todavía (sin datos reales que perder); no debería volver a pasar.
+    const clusterIdentifier = `fuelhub-${props.grupoId}-${props.ambiente}`;
+    const secretName = `fuelhub/${props.grupoId}/${props.ambiente}/db-credentials`;
+
     this.cluster = new rds.DatabaseCluster(this, 'AuroraCluster', {
+      clusterIdentifier,
       engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.VER_16_9 }),
       vpc: props.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED }, // única subred que crea NetworkStack (sin NAT)
@@ -52,7 +67,7 @@ export class DataStack extends Stack {
       serverlessV2MinCapacity: 0,
       serverlessV2MaxCapacity: 2,
       defaultDatabaseName: NOMBRE_BASE_DATOS,
-      credentials: rds.Credentials.fromGeneratedSecret('fuelhub_admin'),
+      credentials: rds.Credentials.fromGeneratedSecret('fuelhub_admin', { secretName }),
       enableDataApi: true,
       storageEncrypted: true,
       removalPolicy,
