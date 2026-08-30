@@ -12,7 +12,7 @@
 // Cognito, sobre el User Pool ya existente — ver la nota grande en
 // `auth-stack.ts`).
 
-import { Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -260,5 +260,13 @@ export class ApiStack extends Stack {
     dataStack.idempotencyTable.grantReadWriteData(ingestCierreDia.fn);
 
     notificacionesBus.grantPutEventsTo(ingestCierreDia.fn);
+
+    // ApiUrl -- v1.51, agregado para que `scripts/smoke-test.mjs` (12.3/12.6)
+    // pueda descubrir la URL real del API Gateway por CloudFormation en vez
+    // de necesitar que alguien la pegue a mano — mismo criterio que
+    // `ClusterArn`/`SecretArn`/`DatabaseName` de `data-stack.ts` (v1.50).
+    // `this.api.url` ya incluye el stage (`.../dev/` o `.../prod/`) con "/"
+    // final.
+    new CfnOutput(this, 'ApiUrl', { value: this.api.url });
   }
 }

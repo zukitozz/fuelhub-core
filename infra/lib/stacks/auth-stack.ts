@@ -39,7 +39,7 @@
 // solo apunta a un ID ya existente), así que esa dirección única no genera
 // ciclo.
 
-import { Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type { Construct } from 'constructs';
 
@@ -59,6 +59,19 @@ export interface AuthStackProps extends StackProps {
 // `${grupoId}-${ambiente}` en vez de solo `grupoId`.
 const USER_POOL_ID_POR_GRUPO: Record<string, string> = {
   nonato: 'us-east-2_nQ1gjcb0j', // ver 9.2.1 — User Pool "tczat3", región us-east-2
+};
+
+// URL completa del endpoint de token OAuth2 (`.../oauth2/token`) del dominio
+// Cognito configurado a mano para el User Pool de cada grupo (9.2.1) -- v1.51,
+// agregado para que `scripts/smoke-test.mjs` (12.3/12.6) pueda pedir un token
+// M2M real sin tenerlo hardcodeado en el script. CDK no puede derivar esto
+// del Pool importado (`fromUserPoolId` no expone su dominio) así que se
+// registra acá a mano, mismo criterio que `USER_POOL_ID_POR_GRUPO` de arriba.
+// Debe coincidir con `openapi.yaml`
+// (`components.securitySchemes.cognitoM2M.flows.clientCredentials.tokenUrl`)
+// -- si uno cambia, el otro también.
+const TOKEN_ENDPOINT_POR_GRUPO: Record<string, string> = {
+  nonato: 'https://us-east-2nq1gjcb0j.auth.us-east-2.amazoncognito.com/oauth2/token', // dominio Cognito del User Pool "tczat3", ver 9.2.1
 };
 
 export class AuthStack extends Stack {
@@ -85,5 +98,20 @@ export class AuthStack extends Stack {
     // de este `userPool` — ver la nota grande de cabecera (evita el ciclo
     // de dependencia entre stacks).
     this.userPool = cognito.UserPool.fromUserPoolId(this, 'UserPool', userPoolId);
+
+    // TokenEndpoint -- v1.51, ver la nota de `TOKEN_ENDPOINT_POR_GRUPO` arriba.
+    // Mismo criterio de "falla explícito, no en silencio" que el `if` de
+    // `userPoolId` de arriba: si alguien agrega un grupo nuevo a
+    // `USER_POOL_ID_POR_GRUPO` sin agregarlo también acá, este stack no
+    // despliega -- mejor eso que un smoke-test fallando después con un error
+    // de CloudFormation "Output no encontrado" difícil de rastrear hasta acá.
+    const tokenEndpoint = TOKEN_ENDPOINT_POR_GRUPO[props.grupoId];
+    if (!tokenEndpoint) {
+      throw new Error(
+        `AuthStack: no hay un "tokenEndpoint" registrado para el grupo "${props.grupoId}" en TOKEN_ENDPOINT_POR_GRUPO. ` +
+          'Hay que registrar el dominio Cognito del User Pool de este grupo (9.2.1) antes de desplegar.'
+      );
+    }
+    new CfnOutput(this, 'TokenEndpoint', { value: tokenEndpoint });
   }
 }

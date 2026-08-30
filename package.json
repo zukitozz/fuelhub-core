@@ -8,7 +8,8 @@
     "lint": "eslint .",
     "test:unit": "jest",
     "test:integration": "node scripts/test-integration.mjs",
-    "db:migrate": "node scripts/db-migrate.mjs"
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "smoke-test": "node scripts/smoke-test.mjs"
   },
   "devDependencies": {
     "@aws-lambda-powertools/idempotency": "^2.35.0",
