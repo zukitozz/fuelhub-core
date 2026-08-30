@@ -6,6 +6,15 @@
 // camelCase↔snake_case ocurre en el adaptador Postgres (infra), nunca en esta
 // capa HTTP (sección 11.1: "nunca se expone el nombre de columna... en el
 // contrato público" también implica que el HTTP mapper no debe conocerlos).
+//
+// Este archivo ya NO exporta `extraerIdempotencyKey` — existió acá pero
+// nunca se llamaba desde `handler.ts` (quedó como código muerto: la
+// extracción real la hace `makeIdempotent`/Powertools internamente, vía
+// `eventKeyJmesPath`). Se reemplaza por `withNormalizedIdempotencyKeyHeader`
+// en `@fuelhub/shared-kernel/apiGatewayEvent.ts` — una sola implementación,
+// compartida con `ingest-cierre-dia`, que sí se engancha en el punto real
+// donde hace falta (antes de que Powertools vea el evento). Ver el
+// comentario de cabecera de ese archivo para el bug real que motivó esto.
 
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
 import type { CierreTurnoInput } from '../../domain/CierreTurnoInput';
@@ -15,14 +24,6 @@ export interface ApiGatewayEventLike {
   readonly isBase64Encoded?: boolean;
   readonly headers?: Record<string, string | undefined>;
   readonly requestContext?: { authorizer?: { claims?: Record<string, string> } };
-}
-
-export function extraerIdempotencyKey(event: ApiGatewayEventLike): string | undefined {
-  const headers = event.headers ?? {};
-  // API Gateway normaliza nombres de header con distinta capitalización según
-  // el caso — se busca sin sensibilidad a mayúsculas para no depender de eso.
-  const clave = Object.keys(headers).find((h) => h.toLowerCase() === 'idempotency-key');
-  return clave ? headers[clave] : undefined;
 }
 
 export function parsearCierreTurnoInput(event: ApiGatewayEventLike): CierreTurnoInput {

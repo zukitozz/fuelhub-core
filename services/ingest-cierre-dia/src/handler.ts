@@ -12,7 +12,7 @@ import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { IdempotencyConfig, makeIdempotent } from '@aws-lambda-powertools/idempotency';
 import { DynamoDBPersistenceLayer } from '@aws-lambda-powertools/idempotency/dynamodb';
-import { parseAuthContext } from '@fuelhub/shared-kernel';
+import { parseAuthContext, withNormalizedIdempotencyKeyHeader } from '@fuelhub/shared-kernel';
 import { downgradeReplayStatusTo200, jsonResponse, mapErrorToResponse, type ApiResponse } from '@fuelhub/shared-kernel';
 import { RegistrarCierreDia } from './application/use-cases/RegistrarCierreDia';
 import { PostgresCierreDiaIngestaRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCierreDiaIngestaRepository';
@@ -51,10 +51,16 @@ const manejarRequest = async (event: ApiGatewayEventLike, _context: Context): Pr
   }
 };
 
-export const handler = makeIdempotent(manejarRequest, {
+const handlerIdempotente = makeIdempotent(manejarRequest, {
   persistenceStore,
   config: idempotencyConfig,
 });
+
+// Ver el comentario equivalente en `ingest-cierre-turno/src/handler.ts` y la
+// cabecera de `apiGatewayEvent.ts` — mismo bug real de casing HTTP/2, mismo
+// fix: normalizar el header ANTES de que Powertools lo procese.
+export const handler = (event: ApiGatewayEventLike, context: Context): Promise<ApiResponse> =>
+  handlerIdempotente(withNormalizedIdempotencyKeyHeader(event), context);
 
 function requiredEnv(nombre: string): string {
   const valor = process.env[nombre];

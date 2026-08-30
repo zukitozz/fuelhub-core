@@ -1,3 +1,4 @@
+export * from './apiGatewayEvent';
 export * from './AuthContext';
 export * from './errors';
 export * from './http';

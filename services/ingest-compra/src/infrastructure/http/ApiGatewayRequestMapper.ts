@@ -1,7 +1,8 @@
 // infrastructure/http/ApiGatewayRequestMapper.ts
 //
 // Mismo criterio que los mappers de ingest-cierre-turno/ingest-cierre-dia —
-// acá sin `extraerIdempotencyKey` porque este endpoint no la usa (sección 11.2).
+// acá sin `withNormalizedIdempotencyKeyHeader` (`@fuelhub/shared-kernel`)
+// porque este endpoint no es idempotente por header (sección 11.2, POST /compras).
 
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
 import type { CompraInput } from '../../domain/CompraInput';

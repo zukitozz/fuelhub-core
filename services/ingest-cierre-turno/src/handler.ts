@@ -16,7 +16,7 @@ import type { Context } from 'aws-lambda';
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import { IdempotencyConfig, makeIdempotent } from '@aws-lambda-powertools/idempotency';
 import { DynamoDBPersistenceLayer } from '@aws-lambda-powertools/idempotency/dynamodb';
-import { parseAuthContext } from '@fuelhub/shared-kernel';
+import { parseAuthContext, withNormalizedIdempotencyKeyHeader } from '@fuelhub/shared-kernel';
 import { downgradeReplayStatusTo200, jsonResponse, mapErrorToResponse, type ApiResponse } from '@fuelhub/shared-kernel';
 import { RegistrarCierreTurno } from './application/use-cases/RegistrarCierreTurno';
 import { PostgresCierreTurnoIngestaRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCierreTurnoIngestaRepository';
@@ -50,10 +50,22 @@ const manejarRequest = async (event: ApiGatewayEventLike, _context: Context): Pr
   }
 };
 
-export const handler = makeIdempotent(manejarRequest, {
+const handlerIdempotente = makeIdempotent(manejarRequest, {
   persistenceStore,
   config: idempotencyConfig,
 });
+
+// `withNormalizedIdempotencyKeyHeader` (`@fuelhub/shared-kernel`) ANTES de
+// `handlerIdempotente`, no después: Powertools evalúa `eventKeyJmesPath`
+// (`headers."Idempotency-Key"`, case-sensitive) internamente, apenas recibe
+// el evento — hay que corregir el casing del header antes de que Powertools
+// lo vea, nunca dentro de `manejarRequest` (ya sería tarde). Bug real, no
+// hipotético: un curl con soporte HTTP/2 manda `idempotency-key` en
+// minúsculas (el protocolo lo exige, RFC 9113 8.2.1) y sin esto rompía con
+// `IdempotencyPersistenceLayerError` — ver el comentario de cabecera en
+// `apiGatewayEvent.ts`.
+export const handler = (event: ApiGatewayEventLike, context: Context): Promise<ApiResponse> =>
+  handlerIdempotente(withNormalizedIdempotencyKeyHeader(event), context);
 
 function requiredEnv(nombre: string): string {
   const valor = process.env[nombre];
