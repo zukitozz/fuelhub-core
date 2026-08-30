@@ -1,0 +1,157 @@
+# FuelHub Cloud -- rol de IAM que GitHub Actions asume via OIDC para
+# desplegar (seccion 12.5/13.5 del spec). NO se aplica desde el propio
+# pipeline (seria el huevo y la gallina: el pipeline necesita este rol para
+# poder autenticarse contra AWS) -- lo aplica Jorge una sola vez, a mano,
+# desde su cuenta de AWS (Opcion A: todo lo que toca cuentas de AWS/GitHub
+# lo corre el, nunca pasa por Claude ni por credenciales compartidas en el
+# chat).
+#
+# Que NO hace este rol: no le da a GitHub Actions permisos directos sobre
+# Lambda/API Gateway/RDS/Cognito/etc. Eso seria mal diseno frente a como
+# funciona `cdk deploy` de verdad (CDK v2, "new-style synthesis" -- ver
+# infra/cdk.json, no tiene ninguna config vieja que la desactive): la
+# identidad que invoca `cdk deploy` (aca, este rol) nunca crea recursos de
+# AWS directamente. Sube los assets (codigo de cada Lambda) usando el
+# file-publishing-role que ya crea `cdk bootstrap`, y le pide a
+# CloudFormation que aplique el stack pasandole el cfn-exec-role (tambien de
+# `cdk bootstrap`) -- es CloudFormation, no GitHub Actions, quien termina
+# creando/modificando cada recurso real, usando los permisos de ESE rol.
+#
+# Por eso lo unico que este rol necesita es sts:AssumeRole sobre los 3 roles
+# del "toolkit" de CDK (deploy-role, file-publishing-role, lookup-role) --
+# nada mas. Es la interpretacion correcta de "minimo privilegio" para este
+# caso concreto, no una lista de servicios a mano (Lambda, API Gateway, RDS,
+# Cognito...) que igual no la usaria `cdk deploy` desde el lado del caller.
+#
+# Lo que SI queda abierto (documentado a proposito, no un descuido): los
+# permisos reales de creacion de recursos los define el cfn-exec-role que ya
+# existe en la cuenta desde que corriste `cdk bootstrap` la primera vez
+# (seccion 13.3, Fase 1 -- "la cuenta/region de nonato, us-east-2, ya lo
+# esta"). Por default ese rol trae AdministratorAccess, y -- importante,
+# porque esta cuenta de AWS no es solo de FuelHub -- es el MISMO rol
+# compartido que usan tus otros proyectos con CDK en la misma cuenta/region
+# (mismo qualifier hnb659fds, el default). Achicarlo aca romperia esos otros
+# proyectos sin avisar. Si en algun momento queres que FuelHub tenga su
+# propio cfn-exec-role acotado a los servicios reales que usa (aislado de
+# tus otros proyectos, con su propio
+# `cdk bootstrap --qualifier fuelhub2026 --cloudformation-execution-policies <policy-propia>`),
+# es un cambio real pero separado de este archivo -- avisame si lo queres y
+# lo armamos aparte.
+#
+# Sobre el recurso GithubOidcProvider de abajo: el identity provider de
+# GitHub Actions es UNICO POR CUENTA DE AWS, no por proyecto. Si ya lo
+# creaste antes para otro repo tuyo (revisa IAM > Identity providers en la
+# consola ANTES de aplicar este stack), usa CrearProveedorOIDC=false +
+# ProveedorOIDCArnExistente en vez de este recurso. El ThumbprintList de
+# abajo es un requisito de forma del recurso CloudFormation -- desde 2023
+# IAM valida el certificado real de GitHub contra su propia lista de
+# proveedores conocidos y no depende de este valor para decidir la
+# confianza, asi que no hace falta que sea el "hash exacto" de nada.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  FuelHub Cloud - rol de IAM (OIDC) para que GitHub Actions despliegue sin
+  credenciales de larga duracion (secciones 12.5/13.5). Ver comentarios al
+  inicio del archivo fuente para el detalle completo del diseno.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: zukitozz
+    Description: Usuario/organizacion de GitHub dueno del repo.
+
+  GitHubRepo:
+    Type: String
+    Default: fuelhub-core
+    Description: Nombre del repo (sin el org/usuario delante).
+
+  CdkQualifier:
+    Type: String
+    Default: hnb659fds
+    Description: >-
+      El qualifier de tu cdk bootstrap - hnb659fds es el default de CDK
+      (ver infra/cdk.json, no tiene @aws-cdk/core:bootstrapQualifier
+      seteado, asi que aplica el default).
+
+  CrearProveedorOIDC:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      'false' si ya existe un identity provider de
+      token.actions.githubusercontent.com en tu cuenta (de otro proyecto) -
+      revisalo en IAM > Identity providers antes de aplicar este stack.
+
+  ProveedorOIDCArnExistente:
+    Type: String
+    Default: ''
+    Description: >-
+      Solo si CrearProveedorOIDC=false: ARN del provider existente
+      (arn:aws:iam::<cuenta>:oidc-provider/token.actions.githubusercontent.com).
+
+Conditions:
+  DebeCrearProveedor: !Equals [!Ref CrearProveedorOIDC, 'true']
+
+Resources:
+  GithubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: DebeCrearProveedor
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  FuelHubGitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FuelHubGitHubActionsDeployRole
+      Description: >-
+        Asumido por GitHub Actions (repo zukitozz/fuelhub-core) via OIDC
+        para correr cdk deploy - secciones 12.5/13.5. Sin credenciales de
+        larga duracion en GitHub.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - DebeCrearProveedor
+                - !Ref GithubOidcProvider
+                - !Ref ProveedorOIDCArnExistente
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Solo jobs que corren DENTRO de un GitHub Environment de
+                # este repo (deploy-dev/deploy-prod en deploy-grupo.yml,
+                # cada uno atado a dev-<grupo>/prod-<grupo> - seccion 13.5)
+                # piden un token cuyo "sub" tiene esta forma. El job synth
+                # (sin `environment:`, ver deploy-grupo.yml) nunca puede
+                # pedir un token que matchee esto - ni falta que le haga, no
+                # llama a configure-aws-credentials. El wildcard final cubre
+                # cualquier grupo futuro (13.3) sin tener que volver a tocar
+                # este rol cada vez que se da de alta uno nuevo.
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:environment:*'
+      Policies:
+        - PolicyName: AsumirRolesToolkitCDK
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-deploy-role-${AWS::AccountId}-us-east-2'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-file-publishing-role-${AWS::AccountId}-us-east-2'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-${CdkQualifier}-lookup-role-${AWS::AccountId}-us-east-2'
+
+Outputs:
+  DeployRoleArn:
+    Description: >-
+      Valor para el secret de repo AWS_DEPLOY_ROLE_ARN (Settings > Secrets
+      and variables > Actions > New repository secret - no un secret de
+      Environment, seccion 13.5).
+    Value: !GetAtt FuelHubGitHubActionsDeployRole.Arn
