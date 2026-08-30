@@ -17,7 +17,10 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
 
   afterAll(async () => {
     if (idCreado) {
-      await ejecutar('DELETE FROM compras WHERE id = :id', [{ name: 'id', value: { stringValue: idCreado } }]);
+      // CAST(... AS uuid) -- v1.51, mismo bug que los tests hermanos de
+      // cierres_turno/cierres_dia (RDS Data API sin tipo explícito, sin
+      // cast implícito de texto a uuid).
+      await ejecutar('DELETE FROM compras WHERE id = CAST(:id AS uuid)', [{ name: 'id', value: { stringValue: idCreado } }]);
     }
   });
 
@@ -47,7 +50,7 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
     // cantidad(500) * costoUnitario(12.345) — columna GENERATED de Postgres, se relee con RETURNING.
     expect(registrado.costoTotal).toBeCloseTo(6172.5, 2);
 
-    const filas = await ejecutar('SELECT costo_total FROM compras WHERE id = :id', [
+    const filas = await ejecutar('SELECT costo_total FROM compras WHERE id = CAST(:id AS uuid)', [
       { name: 'id', value: { stringValue: registrado.id } },
     ]);
     expect(Number(filas[0]?.costo_total)).toBeCloseTo(6172.5, 2);

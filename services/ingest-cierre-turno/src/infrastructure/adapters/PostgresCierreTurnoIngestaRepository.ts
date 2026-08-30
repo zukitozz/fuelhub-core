@@ -140,10 +140,17 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
 
     if (referenciados.length === 0) return; // ninguna línea usa el catálogo cruzado (sección 3.8.1.1)
 
+    // v1.51 -- descubierto en el primer test:integration real contra Aurora:
+    // RDS Data API rechaza `arrayValue` acá con "ValidationException: Array
+    // parameters are not supported." (limitación real del servicio, no un
+    // typo de tipos -- el SDK sí tiene el campo `arrayValue`, pero esta
+    // llamada concreta lo rechaza en runtime). Se arma un placeholder
+    // individual por id en vez de un solo parámetro de array.
     const idsUnicos = [...new Set(referenciados.map((x) => x.id))];
+    const placeholders = idsUnicos.map((_, i) => `CAST(:id${i} AS uuid)`).join(', ');
     const filas = await this.ejecutar(
-      'SELECT id FROM productos_maestro WHERE id = ANY(CAST(:ids AS uuid[])) AND activo = true',
-      [{ name: 'ids', value: { arrayValue: { stringValues: idsUnicos } } }],
+      `SELECT id FROM productos_maestro WHERE id IN (${placeholders}) AND activo = true`,
+      idsUnicos.map((id, i) => paramText(`id${i}`, id)),
       transactionId
     );
     const idsActivos = new Set(filas.map((f) => String(f.id)));

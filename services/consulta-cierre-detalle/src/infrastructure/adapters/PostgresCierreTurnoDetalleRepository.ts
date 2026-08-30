@@ -27,6 +27,9 @@ export class PostgresCierreTurnoDetalleRepository implements CierreTurnoDetalleR
   constructor(private readonly client: RDSDataClient, private readonly config: AuroraDataApiConfig) {}
 
   async obtenerPorId(id: string): Promise<CierreTurnoDetalleDTO | undefined> {
+    // CAST(:id AS uuid) en las 3 consultas de abajo -- v1.51, descubierto en
+    // el primer test:integration real: RDS Data API manda el parámetro sin
+    // tipo explícito y Postgres no tiene cast implícito de texto a uuid.
     const sqlCabecera = `
       SELECT ct.id, e.codigo AS codigo_estacion, ct.isla, ct.turno, ct.fecha_negocio,
              ct.fecha_inicio, ct.fecha, ct.total, ct.estado,
@@ -35,7 +38,7 @@ export class PostgresCierreTurnoDetalleRepository implements CierreTurnoDetalleR
       FROM cierres_turno ct
       JOIN estaciones e ON e.id = ct.estacion_id
       LEFT JOIN usuarios u ON u.id = ct.usuario_id
-      WHERE ct.id = :id
+      WHERE ct.id = CAST(:id AS uuid)
     `;
 
     const filasCabecera = await this.ejecutar(sqlCabecera, [param('id', id)]);
@@ -44,13 +47,13 @@ export class PostgresCierreTurnoDetalleRepository implements CierreTurnoDetalleR
 
     const [pagos, detalle] = await Promise.all([
       this.ejecutar(
-        `SELECT medio_pago, monto FROM cierres_turno_pagos WHERE cierre_turno_id = :id ORDER BY medio_pago`,
+        `SELECT medio_pago, monto FROM cierres_turno_pagos WHERE cierre_turno_id = CAST(:id AS uuid) ORDER BY medio_pago`,
         [param('id', id)]
       ),
       this.ejecutar(
         `SELECT producto_id, producto_codigo_local, producto_nombre, medida, total_cantidad, total_soles,
                 calibracion_cantidad, calibracion_soles, despacho_cantidad, despacho_soles
-         FROM cierres_turno_detalle WHERE cierre_turno_id = :id ORDER BY id`,
+         FROM cierres_turno_detalle WHERE cierre_turno_id = CAST(:id AS uuid) ORDER BY id`,
         [param('id', id)]
       ),
     ]);

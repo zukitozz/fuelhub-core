@@ -29,7 +29,10 @@ describe('PostgresCierreDiaIngestaRepository (integración real, sin mocks)', ()
 
   afterAll(async () => {
     if (idCreado) {
-      await ejecutar('DELETE FROM cierres_dia WHERE id = :id', [{ name: 'id', value: { stringValue: idCreado } }]);
+      // CAST(... AS uuid) -- v1.51, descubierto en el primer test:integration
+      // real: RDS Data API manda el parámetro sin tipo explícito y Postgres
+      // no tiene cast implícito de texto a uuid para "=".
+      await ejecutar('DELETE FROM cierres_dia WHERE id = CAST(:id AS uuid)', [{ name: 'id', value: { stringValue: idCreado } }]);
     }
   });
 

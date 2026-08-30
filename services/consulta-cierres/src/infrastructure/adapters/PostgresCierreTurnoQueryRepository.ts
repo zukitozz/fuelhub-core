@@ -82,7 +82,12 @@ export class PostgresCierreTurnoQueryRepository implements CierreTurnoQueryRepos
 }
 
 function construirWhere(filtros: FiltrosCierreTurno): { whereSql: string; parameters: SqlParameter[] } {
-  const condiciones: string[] = ['ct.estado = :estado'];
+  // CAST(:estado AS estado_cierre) -- v1.51, mismo bug que se encontró y
+  // corrigió en el repositorio hermano PostgresCierreDiaQueryRepository (no
+  // lo disparó ningún test:integration existente, pero es idéntico: RDS
+  // Data API manda el parámetro sin tipo explícito y Postgres no tiene cast
+  // implícito de texto al ENUM estado_cierre para "=").
+  const condiciones: string[] = ['ct.estado = CAST(:estado AS estado_cierre)'];
   const parameters: SqlParameter[] = [param('estado', filtros.estado)];
 
   if (filtros.estacionCodigo) {

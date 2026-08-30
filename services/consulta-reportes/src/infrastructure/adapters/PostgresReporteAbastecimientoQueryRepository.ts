@@ -50,8 +50,14 @@ export class PostgresReporteAbastecimientoQueryRepository implements ReporteAbas
       condicionesFinal.push('e.codigo = :estacionCodigo');
       parametros.push({ name: 'estacionCodigo', value: { stringValue: filtros.estacionCodigo } });
     } else if (filtros.estacionesCodigos && filtros.estacionesCodigos.length > 0) {
-      condicionesFinal.push('e.codigo = ANY(CAST(:estacionesCodigos AS text[]))');
-      parametros.push({ name: 'estacionesCodigos', value: { arrayValue: { stringValues: [...filtros.estacionesCodigos] } } });
+      // IN (...) con un placeholder por código -- v1.51, mismo motivo que
+      // PostgresCierreTurnoIngestaRepository.validarProductos: RDS Data API
+      // rechaza `arrayValue` en runtime ("Array parameters are not
+      // supported"), sin importar el tipo de los elementos.
+      const codigos = [...filtros.estacionesCodigos];
+      const placeholders = codigos.map((_, i) => `:estacionCodigo${i}`).join(', ');
+      condicionesFinal.push(`e.codigo IN (${placeholders})`);
+      codigos.forEach((codigo, i) => parametros.push({ name: `estacionCodigo${i}`, value: { stringValue: codigo } }));
     }
 
     const sql = `
@@ -65,7 +71,16 @@ export class PostgresReporteAbastecimientoQueryRepository implements ReporteAbas
         GROUP BY ct.estacion_id, ctd.producto_id
       ),
       frecuencia_real AS (
-        SELECT estacion_id, producto_id, AVG(fecha - fecha_anterior) AS dias_entre_compras
+        -- EXTRACT(EPOCH FROM ...) / 86400 -- v1.51, descubierto en el primer
+        -- test:integration real: "fecha - fecha_anterior" da un INTERVAL de
+        -- Postgres, y más abajo se compara contra una expresión NUMERIC
+        -- (capacidad / venta_promedio_diaria) sin cast posible entre esos
+        -- dos tipos ("operator does not exist: interval > numeric"). Se
+        -- convierte a días (numeric) acá, en el origen, en vez de castear en
+        -- cada punto donde se usa -- también corrige de paso que
+        -- formatRecordsAs 'JSON' no serializa un INTERVAL como algo que
+        -- Number(...) (mapearFila/numeroONulo, abajo) pueda leer.
+        SELECT estacion_id, producto_id, AVG(EXTRACT(EPOCH FROM (fecha - fecha_anterior)) / 86400) AS dias_entre_compras
         FROM (
           SELECT estacion_id, producto_id, fecha,
                  LAG(fecha) OVER (PARTITION BY estacion_id, producto_id ORDER BY fecha) AS fecha_anterior

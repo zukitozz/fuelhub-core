@@ -47,8 +47,14 @@ export class PostgresReporteMargenQueryRepository implements ReporteMargenQueryR
       condicionesFinal.push('e.codigo = :estacionCodigo');
       parametros.push({ name: 'estacionCodigo', value: { stringValue: filtros.estacionCodigo } });
     } else if (filtros.estacionesCodigos && filtros.estacionesCodigos.length > 0) {
-      condicionesFinal.push('e.codigo = ANY(CAST(:estacionesCodigos AS text[]))');
-      parametros.push({ name: 'estacionesCodigos', value: { arrayValue: { stringValues: [...filtros.estacionesCodigos] } } });
+      // IN (...) con un placeholder por código -- v1.51, mismo motivo que
+      // PostgresCierreTurnoIngestaRepository.validarProductos: RDS Data API
+      // rechaza `arrayValue` en runtime ("Array parameters are not
+      // supported"), sin importar el tipo de los elementos.
+      const codigos = [...filtros.estacionesCodigos];
+      const placeholders = codigos.map((_, i) => `:estacionCodigo${i}`).join(', ');
+      condicionesFinal.push(`e.codigo IN (${placeholders})`);
+      codigos.forEach((codigo, i) => parametros.push({ name: `estacionCodigo${i}`, value: { stringValue: codigo } }));
     }
 
     const whereCompras = condicionesCompras.length > 0 ? `WHERE ${condicionesCompras.join(' AND ')}` : '';

@@ -25,7 +25,9 @@ describe('PostgresCierreTurnoIngestaRepository (integración real, sin mocks)', 
     if (idCreado) {
       // Basta con borrar la cabecera: cierres_turno_pagos/cierres_turno_detalle
       // tienen ON DELETE CASCADE hacia cierres_turno (sección 3.3).
-      await ejecutar('DELETE FROM cierres_turno WHERE id = :id', [{ name: 'id', value: { stringValue: idCreado } }]);
+      // CAST(... AS uuid) -- v1.51, mismo bug que el test hermano de
+      // cierres_dia (RDS Data API sin tipo explícito, sin cast implícito).
+      await ejecutar('DELETE FROM cierres_turno WHERE id = CAST(:id AS uuid)', [{ name: 'id', value: { stringValue: idCreado } }]);
     }
   });
 

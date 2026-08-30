@@ -79,7 +79,12 @@ export class PostgresCierreDiaQueryRepository implements CierreDiaQueryRepositor
 }
 
 function construirWhere(filtros: FiltrosCierreDia): { whereSql: string; parameters: SqlParameter[] } {
-  const condiciones: string[] = ['cd.estado = :estado'];
+  // CAST(:estado AS estado_cierre) -- v1.51, descubierto en el primer
+  // test:integration real: RDS Data API manda el parámetro sin tipo
+  // explícito, y Postgres no tiene un cast implícito de "unknown"/text al
+  // ENUM estado_cierre (infra/migrations/1787900000000_esquema-inicial.sql,
+  // línea 28) para el operador "=" en este contexto.
+  const condiciones: string[] = ['cd.estado = CAST(:estado AS estado_cierre)'];
   const parameters: SqlParameter[] = [param('estado', filtros.estado)];
 
   if (filtros.estacionCodigo) {
