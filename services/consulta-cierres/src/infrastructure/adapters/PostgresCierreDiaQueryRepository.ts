@@ -3,6 +3,16 @@
 // Mismo patrón que PostgresCierreTurnoQueryRepository.ts, pero contra
 // `cierres_dia` — es el cierre consolidado del día (administrador), no de
 // un turno individual (sección 3.3/3.4).
+//
+// Bug real encontrado y corregido al escribir `test:integration` (12.6):
+// el JOIN contra `usuarios` usaba `cd.administrador_id`, una columna que no
+// existe en el DDL de 3.3 (la columna real es `usuario_id`, igual que en
+// `cierres_turno` — ver PostgresCierreTurnoQueryRepository.ts, que sí la usa
+// bien). Con esto, `GET /cierres-dia` fallaba con un error real de Postgres
+// ("column cd.administrador_id does not exist") apenas se lo probara contra
+// una base real — nunca se había ejecutado antes contra un esquema real
+// porque `test:unit` (sección 7) deliberadamente no toca adaptadores. Es
+// exactamente el tipo de error que `test:integration` existe para atrapar.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
 import type { ParametrosPaginacion, ResultadoPaginado } from '../../domain/value-objects/Paginacion';
@@ -28,7 +38,7 @@ export class PostgresCierreDiaQueryRepository implements CierreDiaQueryRepositor
              u.usuario AS administrador_codigo, u.nombre AS administrador_nombre, cd.recibido_en
       FROM cierres_dia cd
       JOIN estaciones e ON e.id = cd.estacion_id
-      LEFT JOIN usuarios u ON u.id = cd.administrador_id
+      LEFT JOIN usuarios u ON u.id = cd.usuario_id
       ${whereSql}
       ORDER BY cd.fecha DESC
       LIMIT :limit OFFSET :offset
@@ -38,7 +48,7 @@ export class PostgresCierreDiaQueryRepository implements CierreDiaQueryRepositor
       SELECT COUNT(*) AS total
       FROM cierres_dia cd
       JOIN estaciones e ON e.id = cd.estacion_id
-      LEFT JOIN usuarios u ON u.id = cd.administrador_id
+      LEFT JOIN usuarios u ON u.id = cd.usuario_id
       ${whereSql}
     `;
 

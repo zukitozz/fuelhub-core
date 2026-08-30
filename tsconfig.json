@@ -12,10 +12,12 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@fuelhub/shared-kernel": ["packages/shared-kernel/src/index.ts"]
+      "@fuelhub/shared-kernel": ["packages/shared-kernel/src/index.ts"],
+      "@fuelhub/test-integration-support": ["test/integration/aurora-fixture-helpers.ts"]
     }
   },
   "include": [
+    "test/integration/**/*.ts",
     "packages/shared-kernel/src/**/*.ts",
     "services/consulta-cierres/src/**/*.ts",
     "services/consulta-cierre-detalle/src/**/*.ts",

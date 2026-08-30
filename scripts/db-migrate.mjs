@@ -27,7 +27,6 @@
 // sentencias del adaptador de Data API contra el contenido real de los 3
 // archivos de `infra/migrations/` (ver changelog v1.50).
 
-import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
 import {
   BeginTransactionCommand,
   CommitTransactionCommand,
@@ -38,6 +37,7 @@ import { runner } from 'node-pg-migrate';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crearAuroraDataApiDbClient } from './aurora-data-api-db-client.mjs';
+import { resolverConexionAuroraDataApi } from './resolver-outputs-datastack.mjs';
 
 const REGION = 'us-east-2'; // misma región fija que el resto de infra (infra/bin/app.ts)
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,31 +57,11 @@ function leerArgs(argv) {
   return args;
 }
 
-async function resolverConexionAuroraDataApi(grupo, ambiente) {
-  const stackName = `FuelHubDataStack-${grupo}-${ambiente}`;
-  const cfn = new CloudFormationClient({ region: REGION });
-  const { Stacks } = await cfn.send(new DescribeStacksCommand({ StackName: stackName }));
-  const outputs = Stacks?.[0]?.Outputs ?? [];
-  const buscar = (key) => outputs.find((o) => o.OutputKey === key)?.OutputValue;
-
-  const resourceArn = buscar('ClusterArn');
-  const secretArn = buscar('SecretArn');
-  const database = buscar('DatabaseName');
-  if (!resourceArn || !secretArn || !database) {
-    throw new Error(
-      `No se pudieron leer ClusterArn/SecretArn/DatabaseName de los Outputs del stack "${stackName}". ` +
-        '¿Se desplegó DataStack de este grupo/ambiente antes de correr db:migrate (orden de 12.2/deploy-grupo.yml)? ' +
-        '¿Es una versión de DataStack anterior a v1.50 (sin estos 3 CfnOutput)?'
-    );
-  }
-  return { resourceArn, secretArn, database };
-}
-
 async function main() {
   const { grupo, env } = leerArgs(process.argv.slice(2));
   console.log(`db:migrate — grupo="${grupo}" ambiente="${env}" (región ${REGION})`);
 
-  const { resourceArn, secretArn, database } = await resolverConexionAuroraDataApi(grupo, env);
+  const { resourceArn, secretArn, database } = await resolverConexionAuroraDataApi(grupo, env, REGION);
 
   const rdsClient = new RDSDataClient({ region: REGION });
   const inicio = await rdsClient.send(new BeginTransactionCommand({ resourceArn, secretArn, database }));
