@@ -59,10 +59,34 @@ export function config(): AuroraDataApiConfig {
   return { resourceArn, secretArn, database };
 }
 
+/**
+ * Reintento para `DatabaseResumingException` (v1.51) — copia chica de la
+ * misma lógica de `scripts/aurora-retry.mjs` (no se importa desde ahí para
+ * no requerir `allowJs`/`checkJs` en `tsconfig.json` solo por esto, ver el
+ * comentario de cabecera de ese archivo). Pasa cuando el cluster de Aurora
+ * Serverless v2 (min capacity 0, sección 2.5/10.2) estuvo sin tráfico un
+ * rato y la primera llamada de este suite lo despierta — sección esperada,
+ * no un fallo real.
+ */
+async function conReintentoSiResuming<T>(fn: () => Promise<T>, intentos = 8, esperaMs = 5000): Promise<T> {
+  for (let intento = 1; intento <= intentos; intento++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const esResuming = error instanceof Error && error.name === 'DatabaseResumingException';
+      if (!esResuming || intento === intentos) throw error;
+      console.log(`Aurora resumiendo de pausa (scale-to-zero) — reintento ${intento}/${intentos} en ${esperaMs / 1000}s...`);
+      await new Promise((resolve) => setTimeout(resolve, esperaMs));
+    }
+  }
+  // Inalcanzable: el último intento del for de arriba siempre relanza o retorna.
+  throw new Error('conReintentoSiResuming: agotó los intentos sin lanzar ni retornar (no debería pasar).');
+}
+
 export async function ejecutar(sql: string, parameters: SqlParameter[] = []): Promise<Record<string, unknown>[]> {
   const { resourceArn, secretArn, database } = config();
-  const resultado = await cliente().send(
-    new ExecuteStatementCommand({ resourceArn, secretArn, database, sql, parameters, formatRecordsAs: 'JSON' })
+  const resultado = await conReintentoSiResuming(() =>
+    cliente().send(new ExecuteStatementCommand({ resourceArn, secretArn, database, sql, parameters, formatRecordsAs: 'JSON' }))
   );
   return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
 }

@@ -37,6 +37,7 @@ import { runner } from 'node-pg-migrate';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crearAuroraDataApiDbClient } from './aurora-data-api-db-client.mjs';
+import { conReintentoSiResuming } from './aurora-retry.mjs';
 import { resolverConexionAuroraDataApi } from './resolver-outputs-datastack.mjs';
 
 const REGION = 'us-east-2'; // misma región fija que el resto de infra (infra/bin/app.ts)
@@ -64,7 +65,15 @@ async function main() {
   const { resourceArn, secretArn, database } = await resolverConexionAuroraDataApi(grupo, env, REGION);
 
   const rdsClient = new RDSDataClient({ region: REGION });
-  const inicio = await rdsClient.send(new BeginTransactionCommand({ resourceArn, secretArn, database }));
+  // conReintentoSiResuming (v1.51): esta es la PRIMERA llamada real de Data
+  // API de toda la corrida — si el cluster está recién creado o llevaba un
+  // rato sin tráfico (scale-to-zero, sección 2.5/10.2), justo acá es donde
+  // aparece "DatabaseResumingException" mientras Aurora arranca. Una vez que
+  // esta llamada entra, el resto de la transacción corre sobre un cluster ya
+  // activo.
+  const inicio = await conReintentoSiResuming(() =>
+    rdsClient.send(new BeginTransactionCommand({ resourceArn, secretArn, database }))
+  );
   const transactionId = inicio.transactionId;
   if (!transactionId) {
     throw new Error('RDS Data API no devolvió transactionId al abrir la transacción de la migración.');
