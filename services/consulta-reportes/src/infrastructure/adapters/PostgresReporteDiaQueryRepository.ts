@@ -34,6 +34,20 @@
 // falta backfill/UPDATE de datos históricos, porque `productos_maestro.categoria`
 // ya es NOT NULL para las 5 filas del catálogo cruzado.
 //
+// `CAST(:fechaNegocio AS date)` en ambas consultas (v1.59, hallazgo del
+// integration test real contra `dev`) — mismo motivo que el `CAST(... AS
+// categoria_producto)`/`uuid` ya documentado desde v1.52:
+// RDS Data API manda cada parámetro sin tipo explícito, así que Postgres lo
+// trata como `text` en vez de inferirlo del contexto (`fecha_negocio =
+// :fechaNegocio` sin CAST falla con "operator does not exist: date = text").
+// A diferencia de `fechaDesde`/`fechaHasta` en `PostgresReporteMargenQueryRepository`
+// (que usan `>=`/`<=`, nunca `=`), acá si hace falta el CAST explícito.
+// Posible gap relacionado, no confirmado ni corregido en esta entrada: no
+// está probado que `>=`/`<=` contra `text` sin CAST funcione de verdad en
+// margen — ninguno de los 2 tests de integración existentes de ese
+// repositorio manda `fechaDesde`/`fechaHasta` real, así que ese camino nunca
+// se ejercitó. Queda anotado como pendiente a revisar, no se toca acá.
+//
 // Solo lectura, sin transacción explícita (mismo criterio que el resto de
 // `consulta-reportes`).
 
@@ -92,7 +106,7 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
       FROM cierres_dia cd
       JOIN estaciones e ON e.id = cd.estacion_id
       WHERE e.codigo = :estacionCodigo
-        AND cd.fecha_negocio = :fechaNegocio
+        AND cd.fecha_negocio = CAST(:fechaNegocio AS date)
         AND cd.estado = 'ACTIVO'
       ORDER BY cd.recibido_en DESC
       LIMIT 1
@@ -115,7 +129,7 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
       JOIN estaciones e                ON e.id = ct.estacion_id
       LEFT JOIN productos_maestro pm  ON pm.id = ctd.producto_id
       WHERE e.codigo = :estacionCodigo
-        AND ct.fecha_negocio = :fechaNegocio
+        AND ct.fecha_negocio = CAST(:fechaNegocio AS date)
         AND ct.estado = 'ACTIVO'
       GROUP BY ctd.producto_id, COALESCE(pm.nombre, ctd.producto_nombre), COALESCE(ctd.categoria, pm.categoria)
       ORDER BY ingresos DESC
