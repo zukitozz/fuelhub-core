@@ -6,14 +6,15 @@
 // (`infrastructure/adapters/EventBridgeCierreDiaPublisher.ts`) es el único
 // que conoce `PutEventsCommand`.
 //
-// HALLAZGO A CONFIRMAR (ver changelog del documento): el campo
-// `proyectoCodigo` del `detail` está documentado en la sección 4.1 del spec
-// principal, pero su significado exacto (¿identificador fijo de este backend?
-// ¿algo específico del lado de notificaciones?) es parte del contrato que
-// vive en `specs-notificaciones-whatsapp.md` — documento deliberadamente
-// fuera de alcance de esta sesión. Este adaptador le pone el valor fijo
-// `"fuelhub-cloud"` (igual al `Source` del evento) como mejor esfuerzo; se
-// debe confirmar contra ese otro documento antes de ir a producción.
+// CONFIRMADO v1.57 contra el contrato real recibido de la sesión de
+// `notificaciones-whatsapp`: `proyectoCodigo` es el identificador fijo de
+// este backend visto desde afuera, valor literal `"FUELHUBCLOUD"` (antes
+// `"fuelhub-cloud"`, mismo valor que `Source` — resultó que el contrato real
+// usa casings DISTINTOS para cada uno: `Source: "FuelHubCloud"` pero
+// `proyectoCodigo: "FUELHUBCLOUD"`, no el mismo string en los dos lugares
+// como se había asumido de mejor esfuerzo). El resto de los campos
+// (`estacionId`, `estacionCodigo`, `fechaNegocio`, `total`, `cierreDiaId`)
+// ya calzaban exactos contra ese contrato sin cambios.
 
 export interface CierreDiaRegistradoEvent {
   readonly proyectoCodigo: string;

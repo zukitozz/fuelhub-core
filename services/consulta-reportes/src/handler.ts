@@ -1,17 +1,20 @@
 // handler.ts — composición raíz del Lambda `consulta-reportes` (sección
-// 4.1 / 3.8.2). Último Lambda del inventario inicial: expone las 2 rutas de
-// reportes cross-estación (`GET /reportes/margen`, `GET /reportes/abastecimiento`)
-// bajo un solo Lambda, mismo criterio que consulta-cierres.
+// 4.1 / 3.8.2). Expone las 3 rutas de reportes cross-estación
+// (`GET /reportes/margen`, `GET /reportes/abastecimiento`, y desde v1.58
+// `GET /reportes/dia`) bajo un solo Lambda, mismo criterio que consulta-cierres.
 
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import { parseAuthContext } from '@fuelhub/shared-kernel';
 import { jsonResponse, mapErrorToResponse, type ApiResponse } from '@fuelhub/shared-kernel';
 import { ObtenerReporteMargen } from './application/use-cases/ObtenerReporteMargen';
 import { ObtenerReporteAbastecimiento } from './application/use-cases/ObtenerReporteAbastecimiento';
+import { ObtenerReporteDia } from './application/use-cases/ObtenerReporteDia';
 import { PostgresReporteMargenQueryRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresReporteMargenQueryRepository';
 import { PostgresReporteAbastecimientoQueryRepository } from './infrastructure/adapters/PostgresReporteAbastecimientoQueryRepository';
+import { PostgresReporteDiaQueryRepository } from './infrastructure/adapters/PostgresReporteDiaQueryRepository';
 import {
   mapObtenerReporteAbastecimientoQuery,
+  mapObtenerReporteDiaQuery,
   mapObtenerReporteMargenQuery,
   resolverOperacion,
   type ApiGatewayEventLike,
@@ -26,8 +29,10 @@ const config: AuroraDataApiConfig = {
 const rdsClient = new RDSDataClient({});
 const margenRepo = new PostgresReporteMargenQueryRepository(rdsClient, config);
 const abastecimientoRepo = new PostgresReporteAbastecimientoQueryRepository(rdsClient, config);
+const diaRepo = new PostgresReporteDiaQueryRepository(rdsClient, config);
 const obtenerReporteMargen = new ObtenerReporteMargen(margenRepo);
 const obtenerReporteAbastecimiento = new ObtenerReporteAbastecimiento(abastecimientoRepo);
+const obtenerReporteDia = new ObtenerReporteDia(diaRepo);
 
 export const handler = async (event: ApiGatewayEventLike): Promise<ApiResponse> => {
   try {
@@ -43,6 +48,11 @@ export const handler = async (event: ApiGatewayEventLike): Promise<ApiResponse> 
       case 'abastecimiento': {
         const query = mapObtenerReporteAbastecimientoQuery(event);
         const resultado = await obtenerReporteAbastecimiento.ejecutar(auth, query);
+        return jsonResponse(200, resultado);
+      }
+      case 'dia': {
+        const query = mapObtenerReporteDiaQuery(event);
+        const resultado = await obtenerReporteDia.ejecutar(auth, query);
         return jsonResponse(200, resultado);
       }
       default:

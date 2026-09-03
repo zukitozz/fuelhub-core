@@ -14,7 +14,7 @@
 // `calibracion_cantidad`, `calibracion_soles`, `despacho_cantidad`, `despacho_soles`.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
-import type { CierreTurnoDetalleDTO, DetalleLinea, Pago } from '@fuelhub/shared-kernel';
+import type { CategoriaProducto, CierreTurnoDetalleDTO, DetalleLinea, Pago } from '@fuelhub/shared-kernel';
 import type { CierreTurnoDetalleRepository } from '../../application/ports/CierreTurnoDetalleRepository';
 
 export interface AuroraDataApiConfig {
@@ -52,7 +52,7 @@ export class PostgresCierreTurnoDetalleRepository implements CierreTurnoDetalleR
       ),
       this.ejecutar(
         `SELECT producto_id, producto_codigo_local, producto_nombre, medida, total_cantidad, total_soles,
-                calibracion_cantidad, calibracion_soles, despacho_cantidad, despacho_soles
+                calibracion_cantidad, calibracion_soles, despacho_cantidad, despacho_soles, categoria
          FROM cierres_turno_detalle WHERE cierre_turno_id = CAST(:id AS uuid) ORDER BY id`,
         [param('id', id)]
       ),
@@ -104,6 +104,7 @@ function mapearDetalleLinea(fila: Record<string, unknown>): DetalleLinea {
     calibracionSoles: numeroONull(fila.calibracion_soles),
     despachoCantidad: numeroONull(fila.despacho_cantidad),
     despachoSoles: numeroONull(fila.despacho_soles),
+    categoria: (textoONull(fila.categoria) as CategoriaProducto | null) ?? null,
   };
 }
 

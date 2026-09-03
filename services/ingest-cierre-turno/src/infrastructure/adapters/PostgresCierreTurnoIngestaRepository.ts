@@ -35,7 +35,7 @@ import {
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
-import type { CierreTurnoDetalleDTO, DetalleLinea, Pago } from '@fuelhub/shared-kernel';
+import type { CategoriaProducto, CierreTurnoDetalleDTO, DetalleLinea, Pago } from '@fuelhub/shared-kernel';
 import type { DetalleLineaInput, EmpleadoInput, PagoInput } from '../../domain/CierreTurnoInput';
 import type { CierreTurnoIngestaRepository, DatosCierreTurnoAInsertar } from '../../application/ports/CierreTurnoIngestaRepository';
 
@@ -69,7 +69,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
         ]);
       }
 
-      await this.validarProductos(datos.detalle, transactionId);
+      const categoriaPorProductoId = await this.validarProductos(datos.detalle, transactionId);
 
       const usuarioId = await this.resolverOAutoprovisionarEmpleado(datos.empleado, estacionId, transactionId);
       if (!usuarioId) {
@@ -80,7 +80,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
 
       const cabecera = await this.insertarCabecera(datos, estacionId, usuarioId, transactionId);
       const pagos = await this.insertarPagos(cabecera.id, datos.pagos, transactionId);
-      const detalle = await this.insertarDetalle(cabecera.id, datos.detalle, transactionId);
+      const detalle = await this.insertarDetalle(cabecera.id, datos.detalle, categoriaPorProductoId, transactionId);
 
       await this.client.send(
         new CommitTransactionCommand({
@@ -133,12 +133,23 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
     return filas[0] ? String(filas[0].id) : undefined;
   }
 
-  private async validarProductos(detalle: readonly DetalleLineaInput[], transactionId: string): Promise<void> {
+  /**
+   * Valida que cada `productoId` referenciado exista y esté activo, y de paso
+   * devuelve su `categoria` (v1.58) — el catálogo es la fuente de verdad para
+   * la clasificación combustible/no-combustible de esas líneas, así que
+   * `insertarDetalle` nunca debe volver a preguntarle a la línea de entrada
+   * su propia `categoria` cuando trae `productoId` (ver comentario en
+   * `DetalleLineaInput.categoria`).
+   */
+  private async validarProductos(
+    detalle: readonly DetalleLineaInput[],
+    transactionId: string
+  ): Promise<Map<string, CategoriaProducto>> {
     const referenciados = detalle
       .map((linea, i) => ({ i, id: linea.productoId }))
       .filter((x): x is { i: number; id: string } => !!x.id);
 
-    if (referenciados.length === 0) return; // ninguna línea usa el catálogo cruzado (sección 3.8.1.1)
+    if (referenciados.length === 0) return new Map(); // ninguna línea usa el catálogo cruzado (sección 3.8.1.1)
 
     // v1.51 -- descubierto en el primer test:integration real contra Aurora:
     // RDS Data API rechaza `arrayValue` acá con "ValidationException: Array
@@ -149,12 +160,12 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
     const idsUnicos = [...new Set(referenciados.map((x) => x.id))];
     const placeholders = idsUnicos.map((_, i) => `CAST(:id${i} AS uuid)`).join(', ');
     const filas = await this.ejecutar(
-      `SELECT id FROM productos_maestro WHERE id IN (${placeholders}) AND activo = true`,
+      `SELECT id, categoria FROM productos_maestro WHERE id IN (${placeholders}) AND activo = true`,
       idsUnicos.map((id, i) => paramText(`id${i}`, id)),
       transactionId
     );
-    const idsActivos = new Set(filas.map((f) => String(f.id)));
-    const faltantes = referenciados.filter((x) => !idsActivos.has(x.id));
+    const categoriaPorId = new Map(filas.map((f) => [String(f.id), String(f.categoria) as CategoriaProducto]));
+    const faltantes = referenciados.filter((x) => !categoriaPorId.has(x.id));
 
     if (faltantes.length > 0) {
       throw new ParametrosInvalidosError(
@@ -162,6 +173,8 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
         faltantes.map((f) => ({ field: `detalle[${f.i}].productoId`, issue: 'no existe en productos_maestro o no está activo' }))
       );
     }
+
+    return categoriaPorId;
   }
 
   private async resolverOAutoprovisionarEmpleado(
@@ -234,17 +247,26 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
   private async insertarDetalle(
     cierreTurnoId: string,
     detalle: readonly DetalleLineaInput[],
+    categoriaPorProductoId: Map<string, CategoriaProducto>,
     transactionId: string
   ): Promise<DetalleLinea[]> {
     const resultado: DetalleLinea[] = [];
     for (const linea of detalle) {
+      // v1.58: con productoId, la categoría SIEMPRE viene del catálogo
+      // (`categoriaPorProductoId`, resuelta en `validarProductos`) — se
+      // ignora a propósito cualquier `categoria` que la línea de entrada
+      // traiga en ese caso, el catálogo es la fuente de verdad. Sin
+      // productoId, se usa lo que mandó el cliente (o NULL si no mandó nada).
+      const categoria = linea.productoId ? categoriaPorProductoId.get(linea.productoId) ?? null : linea.categoria ?? null;
+
       await this.ejecutar(
         `INSERT INTO cierres_turno_detalle
            (cierre_turno_id, producto_id, producto_codigo_local, producto_nombre, medida,
-            total_cantidad, total_soles, calibracion_cantidad, calibracion_soles, despacho_cantidad, despacho_soles)
+            total_cantidad, total_soles, calibracion_cantidad, calibracion_soles, despacho_cantidad, despacho_soles, categoria)
          VALUES
            (CAST(:cierreTurnoId AS uuid), CAST(:productoId AS uuid), :codigoLocal, :producto, :medida,
-            :totalCantidad, :totalSoles, :calibracionCantidad, :calibracionSoles, :despachoCantidad, :despachoSoles)`,
+            :totalCantidad, :totalSoles, :calibracionCantidad, :calibracionSoles, :despachoCantidad, :despachoSoles,
+            CAST(:categoria AS categoria_producto))`,
         [
           paramText('cierreTurnoId', cierreTurnoId),
           paramText('productoId', linea.productoId ?? null),
@@ -257,6 +279,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
           paramDecimal('calibracionSoles', linea.calibracionSoles ?? null),
           paramDecimal('despachoCantidad', linea.despachoCantidad ?? null),
           paramDecimal('despachoSoles', linea.despachoSoles ?? null),
+          paramText('categoria', categoria),
         ],
         transactionId
       );
@@ -271,6 +294,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
         calibracionSoles: linea.calibracionSoles ?? null,
         despachoCantidad: linea.despachoCantidad ?? null,
         despachoSoles: linea.despachoSoles ?? null,
+        categoria,
       });
     }
     return resultado;

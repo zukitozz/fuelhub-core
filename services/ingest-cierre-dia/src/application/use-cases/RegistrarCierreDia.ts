@@ -17,7 +17,7 @@ import { validarCierreDia, type CierreDiaInput } from '../../domain/CierreDiaInp
 import type { CierreDiaIngestaRepository } from '../ports/CierreDiaIngestaRepository';
 import type { EventPublisherPort } from '../ports/EventPublisherPort';
 
-const PROYECTO_CODIGO = 'fuelhub-cloud'; // ver nota pendiente en EventPublisherPort.ts
+const PROYECTO_CODIGO = 'FUELHUBCLOUD'; // confirmado v1.57 contra el contrato real de notificaciones-whatsapp — ver EventPublisherPort.ts
 
 export class RegistrarCierreDia {
   constructor(

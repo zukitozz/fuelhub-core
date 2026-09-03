@@ -37,3 +37,25 @@ export function normalizarRangoFechas(fechaDesde?: string, fechaHasta?: string):
   }
   return { fechaDesde, fechaHasta };
 }
+
+/**
+ * Valida `fechaNegocio` como parámetro OBLIGATORIO de un solo día (v1.58,
+ * `GET /v1/reportes/dia`) — a diferencia de `normalizarRangoFechas`, acá no
+ * hay "todo el histórico" por defecto: este reporte siempre es de un día
+ * puntual de una estación puntual (ver `ObtenerReporteDia`), así que la
+ * ausencia del parámetro es un error de validación, no un valor opcional.
+ * Mismo formato/regex que el resto de fechas de calendario del contrato.
+ */
+export function normalizarFechaNegocio(fechaNegocio: string | undefined): string {
+  if (fechaNegocio === undefined || fechaNegocio.length === 0) {
+    throw new ParametrosInvalidosError('Falta el parámetro "fechaNegocio".', [
+      { field: 'fechaNegocio', issue: 'requerido, formato YYYY-MM-DD' },
+    ]);
+  }
+  if (!FORMATO_FECHA.test(fechaNegocio)) {
+    throw new ParametrosInvalidosError('Parámetro "fechaNegocio" inválido.', [
+      { field: 'fechaNegocio', issue: 'debe tener formato YYYY-MM-DD' },
+    ]);
+  }
+  return fechaNegocio;
+}

@@ -4,34 +4,24 @@
 -- `productos_maestro` (seed único y global), este seed es POR ESTACIÓN: cada
 -- una tiene su propia cantidad de tanques, capacidad y producto inicial.
 --
--- ESTADO: COMPLETO con la data real que compartiste (CHANCAYLLO, MALA,
+-- ESTADO: COMPLETO y CONFIRMADO con la data real (CHANCAYLLO, MALA,
 -- ANDAHUASI, PACHACUTEC) — 3 tanques por estación (Diésel/Premium/Regular),
 -- 12 en total. VALIDADO de punta a punta contra un Postgres 16 real (DDL de
 -- 3.3 + seed de productos_maestro + este seed): las 12 filas resultantes
 -- coinciden exactamente con las capacidades de abajo, y una segunda corrida
 -- del Up no agrega filas (ON CONFLICT confirmado). Ver changelog v1.43.
--- Antes de correrlo contra producción, por favor confirma 3
--- supuestos que tuve que asumir porque no venían explícitos en los datos que
--- pasaste (nada de esto bloquea seguir avanzando, pero si alguno está mal
--- hay que corregir el `INSERT` antes de ejecutar):
 --
---   1. **"Petróleo" = Diésel.** Mapeé "petroleo"/"petorleo" al producto
---      `Diésel` de `productos_maestro` (3.8.1) — es el término coloquial
---      habitual en grifos peruanos para el diésel, pero quiero que lo
---      confirmes explícitamente antes de correr esto en serio.
---   2. **Los números son GALONES.** `productos_maestro.medida` de
---      Diésel/Premium/Regular es `GAL` (3.8.1) — asumí que 7000, 3000, etc.
---      ya vienen en esa unidad. Si en realidad me diste otra unidad
---      (barriles, litros), los `INSERT` de abajo quedarían con la capacidad
---      equivocada.
---   3. **1 tanque por producto, nombrado igual que el producto.** Diste un
---      número por producto por estación, así que asumí un solo tanque por
---      producto (`nombre` = 'Diésel'/'Premium'/'Regular') — no un desglose
---      de "2 tanques de Diésel de 3500 cada uno", por ejemplo. Si alguna
---      estación en realidad reparte un mismo producto en más de un tanque
---      físico, avísame para separar esas filas (el `UNIQUE(estacion_id,
---      nombre)` de 3.3 exige un nombre distinto por tanque en ese caso, p.
---      ej. "Diésel 1"/"Diésel 2").
+-- Los 3 supuestos que este archivo dejaba pendientes de confirmar quedaron
+-- CONFIRMADOS por Jorge (changelog v1.56), sin cambios en los `INSERT` de
+-- abajo (la data que reenvió calza exacta con la ya cargada):
+--   1. **"Petróleo" = Diésel** — término coloquial habitual en grifos
+--      peruanos, confirmado explícitamente.
+--   2. **Los números son GALONES** — coincide con `productos_maestro.medida`
+--      de Diésel/Premium/Regular (`GAL`, 3.8.1), confirmado explícitamente.
+--   3. **1 tanque por producto, nombrado igual que el producto** — Jorge
+--      confirmó explícitamente "único tanque por producto" para las 4
+--      estaciones; no hace falta desglosar ningún producto en más de un
+--      tanque físico.
 --
 -- `stock_minimo` queda en NULL en los 12 — no lo mencionaste, y es opcional
 -- (columna nullable, 3.3). Si manejan un umbral real de reabastecimiento por

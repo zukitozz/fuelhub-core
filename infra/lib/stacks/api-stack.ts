@@ -213,12 +213,14 @@ export class ApiStack extends Stack {
       requiredScope: 'fuelhub-api/cierres.write',
     });
 
-    // --- consulta-reportes: GET /reportes/margen + GET /reportes/abastecimiento ---
-    // Último Lambda del inventario (sección 4.1) — reportes cross-estación (3.8.2).
+    // --- consulta-reportes: GET /reportes/margen + GET /reportes/abastecimiento + GET /reportes/dia ---
+    // Reportes cross-estación (3.8.2). `/reportes/dia` se agrega en v1.58
+    // (gap identificado en el contrato con `notificaciones-whatsapp`, v1.57).
 
     const reportes = api.root.getResource('v1')!.addResource('reportes');
     const reportesMargen = reportes.addResource('margen');
     const reportesAbastecimiento = reportes.addResource('abastecimiento');
+    const reportesDia = reportes.addResource('dia');
 
     const consultaReportesMargen = new AuthenticatedEndpoint(this, 'ConsultaReportesMargen', {
       api,
@@ -236,6 +238,22 @@ export class ApiStack extends Stack {
       api,
       authorizer,
       resource: reportesAbastecimiento,
+      method: 'GET',
+      fn: consultaReportesMargen.fn,
+      requiredScope: 'fuelhub-api/cierres.read',
+    });
+
+    // TODO (v1.58, pendiente de v1.57 punto 4): cuando Jorge cree el scope
+    // Cognito `fuelhub-api/reportes.read` y el App Client `notificaciones-whatsapp`
+    // (solo lectura, sin `cierres.write` ni `station.*`), migrar este
+    // `requiredScope` de `cierres.read` a `reportes.read` — hoy se deja en
+    // `cierres.read` a propósito para que sea probable de inmediato con
+    // credenciales ya existentes (p. ej. `fuelhub-smoketest`) sin bloquear
+    // esta entrega a que el trabajo de Cognito en consola esté listo primero.
+    new AuthenticatedEndpoint(this, 'ConsultaReportesDia', {
+      api,
+      authorizer,
+      resource: reportesDia,
       method: 'GET',
       fn: consultaReportesMargen.fn,
       requiredScope: 'fuelhub-api/cierres.read',

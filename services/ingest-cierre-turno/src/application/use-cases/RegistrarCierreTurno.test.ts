@@ -47,6 +47,7 @@ function fakeRepo(): CierreTurnoIngestaRepository & { llamadas: DatosCierreTurno
           calibracionSoles: linea.calibracionSoles ?? null,
           despachoCantidad: linea.despachoCantidad ?? null,
           despachoSoles: linea.despachoSoles ?? null,
+          categoria: linea.categoria ?? null,
         })),
       };
       return dto;

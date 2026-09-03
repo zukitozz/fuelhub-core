@@ -11,6 +11,8 @@
 
 export type Turno = 'TURNO1' | 'TURNO2' | 'TURNO3';
 export type EstadoCierre = 'ACTIVO' | 'ANULADO';
+/** Espejo del ENUM Postgres `categoria_producto` (sección 3.3, v1.58) — ver DetalleLinea.categoria. */
+export type CategoriaProducto = 'COMBUSTIBLE' | 'NO_COMBUSTIBLE';
 
 /** Espejo de `components.schemas.Pago` — OJO: el campo es `medio`, no `metodoPago`. */
 export interface Pago {
@@ -35,6 +37,13 @@ export interface DetalleLinea {
   readonly calibracionSoles: number | null;
   readonly despachoCantidad: number | null;
   readonly despachoSoles: number | null;
+  /**
+   * Combustible/no-combustible (v1.58) — `null` cuando la línea no trae
+   * `productoId` y nadie mandó el campo explícito al registrar el cierre
+   * ("sin clasificar", no un valor adivinado). Ver DetalleLineaInput en
+   * `ingest-cierre-turno/domain/CierreTurnoInput.ts` para la regla completa.
+   */
+  readonly categoria: CategoriaProducto | null;
 }
 
 export interface Empleado {

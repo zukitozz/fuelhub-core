@@ -111,4 +111,39 @@ describe('validarCierreTurno', () => {
     const campos = detalles(() => validarCierreTurno(inputValido({ turno: 'X', pagos: [], detalle: [] })));
     expect(campos.length).toBeGreaterThanOrEqual(3);
   });
+
+  // v1.58 — categoria (combustible/no-combustible, sección 3.8.1/3.8.2)
+
+  it('acepta una línea sin categoria (campo opcional, sección 3.8.1 v1.58)', () => {
+    expect(() =>
+      validarCierreTurno(inputValido({ detalle: [{ producto: 'Balón de gas', codigoLocal: 'BAL10', totalCantidad: 2, totalSoles: 40 }] }))
+    ).not.toThrow();
+  });
+
+  it('acepta COMBUSTIBLE y NO_COMBUSTIBLE como categoria', () => {
+    expect(() =>
+      validarCierreTurno(
+        inputValido({
+          detalle: [
+            { producto: 'Diésel', codigoLocal: 'DSL', totalCantidad: 10, totalSoles: 50, categoria: 'COMBUSTIBLE' },
+            { producto: 'Urea', codigoLocal: 'URE', totalCantidad: 1, totalSoles: 20, categoria: 'NO_COMBUSTIBLE' },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('rechaza una categoria fuera del enum cerrado', () => {
+    const campos = detalles(() =>
+      validarCierreTurno(
+        inputValido({
+          detalle: [{ producto: 'Urea', codigoLocal: 'URE', totalCantidad: 1, totalSoles: 20, categoria: 'GASEOSA' as never }],
+        })
+      )
+    );
+    expect(campos).toContainEqual({
+      field: 'detalle[0].categoria',
+      issue: 'debe ser uno de: COMBUSTIBLE, NO_COMBUSTIBLE (u omitirse)',
+    });
+  });
 });

@@ -94,10 +94,25 @@ components:
         Código de estación a filtrar. Un cliente M2M solo puede consultar su
         propia estación (validado contra custom:station_scope, sección 5.4) —
         se omite o debe coincidir con la estación del token; enviar el código
-        de otra estación responde 403.
+        de otra estación responde 403. En `GET /reportes/dia` este parámetro
+        pasa a ser condicionalmente OBLIGATORIO (400 si falta) cuando el
+        token no resuelve a una única estación por sí solo (token
+        multi-estación o wildcard '*') — ver la descripción de esa operación.
       schema:
         type: string
       example: "CHANCAYLLO"
+    FechaNegocio:
+      name: fechaNegocio
+      in: query
+      required: true
+      description: >
+        Día de negocio puntual a reportar (v1.58, `GET /reportes/dia`) — a
+        diferencia de `fechaDesde`/`fechaHasta`, este reporte es siempre de
+        UN solo día, no un rango.
+      schema:
+        type: string
+        format: date
+      example: "2026-08-22"
     Page:
       name: page
       in: query
@@ -214,6 +229,17 @@ components:
         despachoSoles:
           type: number
           nullable: true
+        categoria:
+          type: string
+          enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+          nullable: true
+          description: >
+            Clasificación combustible/no-combustible (sección 3.8.1/3.8.2, v1.58).
+            OPCIONAL. Si la línea trae `productoId`, el servidor SIEMPRE resuelve
+            la categoría desde el catálogo (`productos_maestro`) e ignora este
+            campo. Solo tiene efecto real cuando no se envía `productoId`: ahí es
+            recomendable enviarla explícita — sin este dato, esa línea queda "sin
+            clasificar" (null) en los reportes que distinguen ambas categorías.
 
     CierreTurnoInput:
       type: object
@@ -515,6 +541,63 @@ components:
         enRiesgo:
           type: boolean
           description: true cuando frecuenciaRealDias > diasDeAutonomiaEstimados (sección 3.8.2.c).
+
+    ReporteDiaProducto:
+      type: object
+      description: Fila por producto dentro de `ReporteDia` (v1.58).
+      properties:
+        productoId:
+          type: string
+          format: uuid
+          nullable: true
+          description: null para líneas sin producto de catálogo (balón de gas, mercadito, etc. — sección 3.8.1.1).
+        producto:
+          type: string
+        categoria:
+          type: string
+          enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+          nullable: true
+          description: >
+            null = "sin clasificar" — línea sin productoId cuyo cliente
+            tampoco mandó categoria explícita al registrar el cierre de
+            turno. No es un valor adivinado; ver totalSinClasificar en
+            ReporteDia.
+        cantidadVendida:
+          type: number
+        ingresos:
+          type: number
+
+    ReporteDia:
+      type: object
+      description: >
+        Reporte de un día puntual de una estación (v1.58) — separa
+        combustible de no-combustible, campo que exige el contrato de
+        integración con el servicio de notificaciones de WhatsApp (evento
+        `CierreDiaRegistrado`, sección 4.1).
+      properties:
+        estacionCodigo:
+          type: string
+        fechaNegocio:
+          type: string
+          format: date
+        cierreDiaId:
+          type: string
+          format: uuid
+          description: Mismo id que trae el evento CierreDiaRegistrado para este día.
+        total:
+          type: number
+          description: cierres_dia.total — el total que reportó el POS al cerrar el día, no un cálculo derivado de detalle.
+        totalCombustible:
+          type: number
+        totalNoCombustible:
+          type: number
+        totalSinClasificar:
+          type: number
+          description: Suma de las líneas con categoria null — nunca se reparte a combustible/no-combustible por defecto.
+        productos:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReporteDiaProducto'
 
     Paginacion:
       type: object
@@ -850,6 +933,43 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /reportes/dia:
+    get:
+      tags: [reportes]
+      summary: Reporte de un día puntual de una estación (combustible vs. no-combustible)
+      description: >
+        v1.58 — separa totalCombustible/totalNoCombustible por producto,
+        pensado para el servicio de notificaciones de WhatsApp reaccionando
+        al evento CierreDiaRegistrado (sección 4.1). A diferencia de los
+        otros 2 reportes, estacionCodigo es OBLIGATORIO cuando el token no
+        resuelve a una única estación por sí solo (token multi-estación o
+        wildcard '*') — con un token de una sola estación puede omitirse.
+        Lambda `consulta-reportes`.
+      operationId: obtenerReporteDia
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/FechaNegocio'
+        - $ref: '#/components/parameters/EstacionCodigo'
+      responses:
+        '200':
+          description: Reporte del día para la estación resuelta.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporteDia'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe un cierre de día ACTIVO para esa estación y fecha (día aún no cerrado, o anulado).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /reportes/margen:
     get:

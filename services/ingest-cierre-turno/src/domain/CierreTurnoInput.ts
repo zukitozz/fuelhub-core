@@ -11,7 +11,7 @@
 // que cada `productoId` esté en el catálogo activo, y que `empleado.codigo`
 // no pertenezca a otra estación.
 
-import { ParametrosInvalidosError, type DetalleValidacion } from '@fuelhub/shared-kernel';
+import { ParametrosInvalidosError, type CategoriaProducto, type DetalleValidacion } from '@fuelhub/shared-kernel';
 
 export interface PagoInput {
   readonly medio: string;
@@ -29,6 +29,15 @@ export interface DetalleLineaInput {
   readonly calibracionSoles?: number | null;
   readonly despachoCantidad?: number | null;
   readonly despachoSoles?: number | null;
+  /**
+   * Clasificación combustible/no-combustible (sección 3.8.1/3.8.2, v1.58) —
+   * OPCIONAL. Cuando la línea trae `productoId`, el servidor SIEMPRE resuelve
+   * la categoría desde `productos_maestro` e ignora este campo (el catálogo
+   * es la fuente de verdad ahí — ver PostgresCierreTurnoIngestaRepository.ts).
+   * Solo tiene efecto real cuando no hay `productoId`: ahí, si se omite, la
+   * línea queda "sin clasificar" (NULL) en vez de asumida por heurístico.
+   */
+  readonly categoria?: CategoriaProducto | null;
 }
 
 export interface EmpleadoInput {
@@ -51,6 +60,7 @@ export interface CierreTurnoInput {
 }
 
 const TURNOS_VALIDOS = new Set(['TURNO1', 'TURNO2', 'TURNO3']);
+const CATEGORIAS_VALIDAS = new Set(['COMBUSTIBLE', 'NO_COMBUSTIBLE']);
 
 /**
  * Valida el payload estructuralmente (sección 3.9) y lanza
@@ -113,6 +123,9 @@ export function validarCierreTurno(input: CierreTurnoInput): void {
       }
       if (typeof linea.totalSoles !== 'number') {
         errores.push({ field: `detalle[${i}].totalSoles`, issue: 'requerido, debe ser numérico' });
+      }
+      if (linea.categoria != null && !CATEGORIAS_VALIDAS.has(linea.categoria)) {
+        errores.push({ field: `detalle[${i}].categoria`, issue: 'debe ser uno de: COMBUSTIBLE, NO_COMBUSTIBLE (u omitirse)' });
       }
     });
   }
