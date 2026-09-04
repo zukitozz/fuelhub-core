@@ -33,14 +33,33 @@ export class PostgresReporteMargenQueryRepository implements ReporteMargenQueryR
     const condicionesVentas: string[] = ["ct.estado = 'ACTIVO'"];
     const condicionesFinal: string[] = [];
 
+    // CAST(:fechaDesde/:fechaHasta AS date) -- v1.60, mismo bug de fondo que
+    // el CAST(:fechaNegocio AS date) de PostgresReporteDiaQueryRepository
+    // (v1.59) y el mismo hallazgo, mismo día, en PostgresCierreTurnoQueryRepository
+    // / PostgresCierreDiaQueryRepository (encontrado en vivo contra `dev` vía
+    // Postman con GET /cierres-turno): RDS Data API manda el parámetro sin
+    // tipo, Postgres lo trata como texto, y "date >= text"/"timestamptz >=
+    // text" no tienen operador. Los 2 tests de integración existentes de
+    // este archivo nunca mandaban fechaDesde/fechaHasta real, así que esto
+    // quedó sin probar desde que se escribió (ver nota de cabecera del
+    // archivo .integration.test.ts).
     if (filtros.fechaDesde) {
-      condicionesCompras.push('c.fecha >= :fechaDesde');
-      condicionesVentas.push('ct.fecha_negocio >= :fechaDesde');
+      condicionesCompras.push('c.fecha >= CAST(:fechaDesde AS date)');
+      condicionesVentas.push('ct.fecha_negocio >= CAST(:fechaDesde AS date)');
       parametros.push({ name: 'fechaDesde', value: { stringValue: filtros.fechaDesde } });
     }
     if (filtros.fechaHasta) {
-      condicionesCompras.push('c.fecha <= :fechaHasta');
-      condicionesVentas.push('ct.fecha_negocio <= :fechaHasta');
+      // Ojo acá con un segundo bug, distinto del CAST, que se corrige de una
+      // vez ya que se está tocando esta línea: `c.fecha` es TIMESTAMPTZ (hora
+      // exacta de la compra), no DATE como `ct.fecha_negocio` -- un simple
+      // "<= CAST(:fechaHasta AS date)" compara contra la MEDIANOCHE de
+      // fechaHasta y así excluiría cualquier compra registrada después de las
+      // 00:00 de ese último día (p. ej. una compra a las 10am del día
+      // fechaHasta quedaría fuera del rango "inclusive" que promete el
+      // contrato, sección 11.2). Se usa "< día siguiente" para incluir el día
+      // completo. `ct.fecha_negocio` no tiene este problema porque ya es DATE.
+      condicionesCompras.push("c.fecha < CAST(:fechaHasta AS date) + INTERVAL '1 day'");
+      condicionesVentas.push('ct.fecha_negocio <= CAST(:fechaHasta AS date)');
       parametros.push({ name: 'fechaHasta', value: { stringValue: filtros.fechaHasta } });
     }
     if (filtros.estacionCodigo) {

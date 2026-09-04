@@ -94,12 +94,22 @@ function construirWhere(filtros: FiltrosCierreTurno): { whereSql: string; parame
     condiciones.push('e.codigo = :estacionCodigo');
     parameters.push(param('estacionCodigo', filtros.estacionCodigo));
   }
+  // CAST(:fechaDesde/:fechaHasta AS date) -- v1.60, mismo bug de fondo que el
+  // CAST de :estado de arriba (y el mismo que ya se había corregido en
+  // PostgresReporteDiaQueryRepository, v1.59): RDS Data API manda el
+  // parámetro sin tipo, Postgres lo trata como texto, y "date >= text" no
+  // tiene operador ("operator does not exist: date >= text"). Encontrado en
+  // vivo contra `dev` (GET /cierres-turno con fechaDesde/fechaHasta reales
+  // vía Postman, estación SMOKETEST) -- este servicio no tenía NINGÚN
+  // test:integration hasta esta misma entrada, así que nunca se había
+  // ejercitado este camino con un valor real. Mismo hallazgo, mismo día, en
+  // PostgresCierreDiaQueryRepository y PostgresReporteMargenQueryRepository.
   if (filtros.fechaDesde) {
-    condiciones.push('ct.fecha_negocio >= :fechaDesde');
+    condiciones.push('ct.fecha_negocio >= CAST(:fechaDesde AS date)');
     parameters.push(param('fechaDesde', filtros.fechaDesde));
   }
   if (filtros.fechaHasta) {
-    condiciones.push('ct.fecha_negocio <= :fechaHasta');
+    condiciones.push('ct.fecha_negocio <= CAST(:fechaHasta AS date)');
     parameters.push(param('fechaHasta', filtros.fechaHasta));
   }
   if (filtros.turno) {

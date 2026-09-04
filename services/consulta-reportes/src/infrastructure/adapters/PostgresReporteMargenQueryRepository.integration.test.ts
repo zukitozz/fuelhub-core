@@ -26,4 +26,15 @@ describe('PostgresReporteMargenQueryRepository (integración real, sin mocks)', 
     expect(Array.isArray(resultado)).toBe(true);
     expect(resultado.every((r) => r.estacion === estacion.codigo)).toBe(true);
   }, 30_000);
+
+  // v1.60 — ninguno de los 2 tests de arriba mandaba fechaDesde/fechaHasta
+  // real, así que nunca ejercitaron el CAST que se agregó a `c.fecha`/
+  // `ct.fecha_negocio` tras el bug real encontrado en vivo el 2026-09-03
+  // (mismo día, mismo patrón, en GET /cierres-turno — ver
+  // PostgresCierreTurnoQueryRepository.integration.test.ts para el detalle).
+  it('corre con fechaDesde/fechaHasta reales (regresión del bug de CAST)', async () => {
+    const repo = new PostgresReporteMargenQueryRepository(cliente(), config());
+    const resultado = await repo.obtener({ fechaDesde: '2000-01-01', fechaHasta: '2099-12-31' });
+    expect(Array.isArray(resultado)).toBe(true);
+  }, 30_000);
 });
