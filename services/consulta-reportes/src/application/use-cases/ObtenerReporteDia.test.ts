@@ -42,6 +42,13 @@ class RepoFake implements ReporteDiaQueryRepository {
   async listarCodigosEstacionesActivas(): Promise<string[]> {
     return [];
   }
+  // Mismo criterio que listarCodigosEstacionesActivas arriba -- agregado
+  // solo para satisfacer la interfaz desde que ObtenerReporteDiaDocumento
+  // (v1.62) la necesita. Ver ObtenerReporteDiaDocumento.test.ts para los
+  // tests que sí la ejercitan.
+  async listarTurnos(): Promise<import('../ports/ReporteDiaQueryRepository').ReporteDiaTurnoDTO[]> {
+    return [];
+  }
 }
 
 describe('ObtenerReporteDia', () => {

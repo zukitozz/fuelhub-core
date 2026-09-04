@@ -10,17 +10,30 @@
 // uso (ObtenerReporteDiaDocumento) -- estos puertos solo saben "renderizar"
 // y "guardar+firmar", nada de Cognito ni de Postgres.
 
-import type { ReporteDiaDTO } from './ReporteDiaQueryRepository';
+import type { ReporteDiaDTO, ReporteDiaTurnoDTO } from './ReporteDiaQueryRepository';
+
+/**
+ * Una estación, para el PDF: su reporte del día (mismos totales que ya
+ * devuelve GET /reportes/dia en JSON) + el desglose turno por turno (v1.62,
+ * a pedido de Jorge -- "apóyate de los cierres de turno que corresponden al
+ * cierre de día"). `turnos` puede venir vacío (día cerrado sin haber
+ * pasado por cierres de turno individuales) sin que eso invalide `reporte`.
+ */
+export interface ReporteDiaEstacionDocumentoDTO {
+  readonly reporte: ReporteDiaDTO;
+  readonly turnos: readonly ReporteDiaTurnoDTO[];
+}
 
 /**
  * Lo que hay que renderizar: o el reporte de UNA estación (mismo caso que
- * GET /reportes/dia en JSON), o el CONSOLIDADO de varias (nuevo en v1.60,
- * solo alcanzable con un token cross-estación -- wildcard o multi-estación
- * explícito -- que no mandó estacionCodigo).
+ * GET /reportes/dia en JSON, con su desglose por turno), o el CONSOLIDADO de
+ * varias (v1.60, solo alcanzable con un token cross-estación -- wildcard o
+ * multi-estación explícito -- que no mandó estacionCodigo), cada una con su
+ * propio desglose por turno.
  */
 export type ReporteDiaDocumentoDatos =
-  | { readonly modo: 'individual'; readonly reporte: ReporteDiaDTO }
-  | { readonly modo: 'consolidado'; readonly fechaNegocio: string; readonly reportes: readonly ReporteDiaDTO[] };
+  | { readonly modo: 'individual'; readonly estacion: ReporteDiaEstacionDocumentoDTO }
+  | { readonly modo: 'consolidado'; readonly fechaNegocio: string; readonly estaciones: readonly ReporteDiaEstacionDocumentoDTO[] };
 
 export interface ReporteDiaRendererPort {
   /** Devuelve el PDF ya armado, listo para subir tal cual a S3. */

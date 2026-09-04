@@ -46,6 +46,27 @@ export interface FiltrosReporteDia {
   readonly fechaNegocio: string;
 }
 
+/**
+ * Un `cierres_turno` real, con su propio desglose por producto -- v1.62,
+ * a pedido de Jorge ("apóyate de los cierres de turno que corresponden al
+ * cierre de día"): el PDF de `GET /reportes/dia/documento` deja de mostrar
+ * solo el total del día y pasa a mostrar, turno por turno, lo mismo que ya
+ * ve el operador de estación en `GET /cierres-turno` -- mismo criterio de
+ * "cierres_dia.total no se recalcula de detalle" (v1.59) aplicado acá:
+ * `total` es el que reportó el POS al cerrar ESE turno, no una suma de
+ * `productos`.
+ */
+export interface ReporteDiaTurnoDTO {
+  readonly cierreTurnoId: string;
+  readonly turno: 'TURNO1' | 'TURNO2' | 'TURNO3';
+  /** `'(sin asignar)'` cuando el turno no tiene `usuario_id` -- no debería pasar en la práctica, pero `usuarios.estacion_id`/`usuario_id` en `cierres_turno` no son NOT NULL (ver 3.3). */
+  readonly empleado: string;
+  readonly fechaInicio: string;
+  readonly fecha: string;
+  readonly total: number;
+  readonly productos: readonly ReporteDiaProductoDTO[];
+}
+
 export interface ReporteDiaQueryRepository {
   /** `null` cuando no existe un `cierres_dia` ACTIVO para esa estación+fecha (día aún no cerrado, o anulado). */
   obtener(filtros: FiltrosReporteDia): Promise<ReporteDiaDTO | null>;
@@ -60,4 +81,15 @@ export interface ReporteDiaQueryRepository {
    * arriba ni ningún otro caso de uso existente.
    */
   listarCodigosEstacionesActivas(): Promise<string[]>;
+
+  /**
+   * Los `cierres_turno` ACTIVOS de una estación+fecha, ordenados por
+   * `fecha_inicio`, cada uno con su propio desglose por producto (v1.62) --
+   * usado solo por `ObtenerReporteDiaDocumento` para el PDF. Lista vacía
+   * cuando no hubo ningún cierre de turno ese día (posible aunque exista un
+   * `cierres_dia` para la fecha, si el POS mandó el cierre de día sin pasar
+   * antes por cierres de turno individuales -- no se asume que siempre haya
+   * al menos uno).
+   */
+  listarTurnos(filtros: FiltrosReporteDia): Promise<ReporteDiaTurnoDTO[]>;
 }

@@ -53,7 +53,13 @@
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
 import type { CategoriaProducto } from '@fuelhub/shared-kernel';
-import type { FiltrosReporteDia, ReporteDiaDTO, ReporteDiaProductoDTO, ReporteDiaQueryRepository } from '../../application/ports/ReporteDiaQueryRepository';
+import type {
+  FiltrosReporteDia,
+  ReporteDiaDTO,
+  ReporteDiaProductoDTO,
+  ReporteDiaQueryRepository,
+  ReporteDiaTurnoDTO,
+} from '../../application/ports/ReporteDiaQueryRepository';
 
 export interface AuroraDataApiConfig {
   readonly resourceArn: string;
@@ -100,6 +106,76 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
   async listarCodigosEstacionesActivas(): Promise<string[]> {
     const filas = await this.ejecutar('SELECT codigo FROM estaciones WHERE activo = TRUE ORDER BY codigo', []);
     return filas.map((fila) => String(fila.codigo));
+  }
+
+  // listarTurnos -- v1.62, ver el comentario del método en el puerto. 2
+  // queries (cabecera de cada turno + productos agrupados por turno) en vez
+  // de 1 por turno -- evita N+1 contra RDS Data API cuando un día tiene
+  // varios turnos. Mismo criterio de CAST/COALESCE ya establecido en el
+  // resto de este archivo (v1.59/v1.58).
+  async listarTurnos(filtros: FiltrosReporteDia): Promise<ReporteDiaTurnoDTO[]> {
+    const parametros: SqlParameter[] = [
+      { name: 'estacionCodigo', value: { stringValue: filtros.estacionCodigo } },
+      { name: 'fechaNegocio', value: { stringValue: filtros.fechaNegocio } },
+    ];
+
+    const [cabeceras, productos] = await Promise.all([
+      this.ejecutar(
+        `
+          SELECT ct.id, ct.turno, COALESCE(u.nombre, '(sin asignar)') AS empleado,
+                 ct.fecha_inicio, ct.fecha, ct.total
+          FROM cierres_turno ct
+          JOIN estaciones e      ON e.id = ct.estacion_id
+          LEFT JOIN usuarios u   ON u.id = ct.usuario_id
+          WHERE e.codigo = :estacionCodigo
+            AND ct.fecha_negocio = CAST(:fechaNegocio AS date)
+            AND ct.estado = 'ACTIVO'
+          ORDER BY ct.fecha_inicio ASC
+        `,
+        parametros
+      ),
+      this.ejecutar(
+        `
+          SELECT ctd.cierre_turno_id                               AS cierre_turno_id,
+                 ctd.producto_id                                    AS producto_id,
+                 COALESCE(pm.nombre, ctd.producto_nombre)           AS producto,
+                 COALESCE(ctd.categoria, pm.categoria)               AS categoria,
+                 SUM(COALESCE(ctd.despacho_cantidad, ctd.total_cantidad, 0)) AS cantidad_vendida,
+                 SUM(COALESCE(ctd.despacho_soles, ctd.total_soles, 0))       AS ingresos
+          FROM cierres_turno_detalle ctd
+          JOIN cierres_turno ct          ON ct.id = ctd.cierre_turno_id
+          JOIN estaciones e               ON e.id = ct.estacion_id
+          LEFT JOIN productos_maestro pm ON pm.id = ctd.producto_id
+          WHERE e.codigo = :estacionCodigo
+            AND ct.fecha_negocio = CAST(:fechaNegocio AS date)
+            AND ct.estado = 'ACTIVO'
+          GROUP BY ctd.cierre_turno_id, ctd.producto_id, COALESCE(pm.nombre, ctd.producto_nombre), COALESCE(ctd.categoria, pm.categoria)
+          ORDER BY ctd.cierre_turno_id, ingresos DESC
+        `,
+        parametros
+      ),
+    ]);
+
+    const productosPorTurno = new Map<string, ReporteDiaProductoDTO[]>();
+    for (const fila of productos) {
+      const cierreTurnoId = String(fila.cierre_turno_id);
+      const lista = productosPorTurno.get(cierreTurnoId) ?? [];
+      lista.push(mapearFilaProducto(fila));
+      productosPorTurno.set(cierreTurnoId, lista);
+    }
+
+    return cabeceras.map((fila) => {
+      const id = String(fila.id);
+      return {
+        cierreTurnoId: id,
+        turno: fila.turno as ReporteDiaTurnoDTO['turno'],
+        empleado: String(fila.empleado),
+        fechaInicio: String(fila.fecha_inicio),
+        fecha: String(fila.fecha),
+        total: Number(fila.total),
+        productos: productosPorTurno.get(id) ?? [],
+      };
+    });
   }
 
   private async obtenerCierreDia(parametros: SqlParameter[]): Promise<{ id: string; total: number } | null> {

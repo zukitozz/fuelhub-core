@@ -24,8 +24,13 @@ import {
   type AuthContext,
 } from '@fuelhub/shared-kernel';
 import { normalizarFechaNegocio } from '../../domain/value-objects/RangoFechas';
-import type { ReporteDiaDTO, ReporteDiaQueryRepository } from '../ports/ReporteDiaQueryRepository';
-import type { DocumentoStoragePort, DocumentoSubidoDTO, ReporteDiaRendererPort } from '../ports/ReporteDiaDocumentoPorts';
+import type { ReporteDiaQueryRepository } from '../ports/ReporteDiaQueryRepository';
+import type {
+  DocumentoStoragePort,
+  DocumentoSubidoDTO,
+  ReporteDiaEstacionDocumentoDTO,
+  ReporteDiaRendererPort,
+} from '../ports/ReporteDiaDocumentoPorts';
 
 export interface ObtenerReporteDiaDocumentoQuery {
   readonly estacionCodigo?: string;
@@ -64,18 +69,19 @@ export class ObtenerReporteDiaDocumento {
       if (reporte === null) {
         throw new RecursoNoEncontradoError('Cierre de día', `${estacionCodigo} / ${fechaNegocio}`);
       }
-      buffer = await this.renderer.renderizarPdf({ modo: 'individual', reporte });
+      const turnos = await this.repo.listarTurnos({ estacionCodigo, fechaNegocio });
+      buffer = await this.renderer.renderizarPdf({ modo: 'individual', estacion: { reporte, turnos } });
       key = `reportes-dia/${fechaNegocio}/${estacionCodigo}-${Date.now()}.pdf`;
     } else {
       // Sin estacionCodigo y el token no resuelve a una única estación: solo
       // llega acá un token multi-estación o wildcard ('*') -- si fuera de una
       // sola estación, estacionUnicaDelToken ya la hubiera devuelto arriba.
       const codigos = await this.resolverCodigosConsolidado(auth);
-      const reportes = await this.obtenerReportesDeCodigos(codigos, fechaNegocio);
-      if (reportes.length === 0) {
+      const estaciones = await this.obtenerEstacionesDeCodigos(codigos, fechaNegocio);
+      if (estaciones.length === 0) {
         throw new RecursoNoEncontradoError('Cierre de día', `(consolidado) / ${fechaNegocio}`);
       }
-      buffer = await this.renderer.renderizarPdf({ modo: 'consolidado', fechaNegocio, reportes });
+      buffer = await this.renderer.renderizarPdf({ modo: 'consolidado', fechaNegocio, estaciones });
       key = `reportes-dia/${fechaNegocio}/consolidado-${Date.now()}.pdf`;
     }
 
@@ -106,8 +112,18 @@ export class ObtenerReporteDiaDocumento {
     return permitidos;
   }
 
-  private async obtenerReportesDeCodigos(codigos: readonly string[], fechaNegocio: string): Promise<ReporteDiaDTO[]> {
-    const resultados = await Promise.all(codigos.map((estacionCodigo) => this.repo.obtener({ estacionCodigo, fechaNegocio })));
-    return resultados.filter((r): r is ReporteDiaDTO => r !== null);
+  // Igual que en el caso individual: el desglose por turno solo se pide
+  // para estaciones que sí tuvieron cierre ese día (evita queries de más
+  // para estaciones sin actividad, en el caso consolidado -- v1.62).
+  private async obtenerEstacionesDeCodigos(codigos: readonly string[], fechaNegocio: string): Promise<ReporteDiaEstacionDocumentoDTO[]> {
+    const reportes = await Promise.all(
+      codigos.map(async (estacionCodigo): Promise<ReporteDiaEstacionDocumentoDTO | null> => {
+        const reporte = await this.repo.obtener({ estacionCodigo, fechaNegocio });
+        if (reporte === null) return null;
+        const turnos = await this.repo.listarTurnos({ estacionCodigo, fechaNegocio });
+        return { reporte, turnos };
+      })
+    );
+    return reportes.filter((r): r is ReporteDiaEstacionDocumentoDTO => r !== null);
   }
 }
