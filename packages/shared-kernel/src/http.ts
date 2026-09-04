@@ -5,6 +5,7 @@
 // contrato OpenAPI (sección 11.1) — un solo lugar que conoce esta forma,
 // para que cada `handler.ts` no la reimplemente.
 
+import { DatabaseResumingException } from '@aws-sdk/client-rds-data';
 import type { ResponseHook } from '@aws-lambda-powertools/idempotency/types';
 import { AccesoDenegadoEstacionError, ParametrosInvalidosError, RecursoNoEncontradoError } from './errors';
 
@@ -40,6 +41,21 @@ export function mapErrorToResponse(err: unknown): ApiResponse {
   }
   if (err instanceof RecursoNoEncontradoError) {
     return jsonResponse(404, errorBody('RECURSO_NO_ENCONTRADO', err.message));
+  }
+  if (err instanceof DatabaseResumingException) {
+    // v1.62 -- llega hasta acá solo cuando ya se agotaron los reintentos
+    // internos (`conReintentoSiDbEstaResumiendo`, `rds-retry.ts`, ~7s de
+    // backoff): la base tardó más que ese presupuesto corto en reanudarse
+    // desde 0 ACU (Aurora Serverless v2 scale-to-zero, sección 2.5/10.2).
+    // Se devuelve 503 (no el 500 genérico de más abajo) + `Retry-After`
+    // para que el consumidor externo (que ya reintenta con su propio
+    // backoff, ~90s -- ver changelog v1.62) sepa que esto SÍ vale la pena
+    // reintentar, en vez de tratarlo como un error permanente/de payload.
+    const respuesta = jsonResponse(
+      503,
+      errorBody('BASE_DE_DATOS_REANUDANDO', 'La base de datos se está reanudando tras un período de inactividad. Reintentar en unos segundos.')
+    );
+    return { ...respuesta, headers: { ...respuesta.headers, 'Retry-After': '5' } };
   }
   console.error('Error no controlado:', err);
   return jsonResponse(500, errorBody('ERROR_INTERNO', 'Ocurrió un error inesperado. Ver logs de CloudWatch para más detalle.'));

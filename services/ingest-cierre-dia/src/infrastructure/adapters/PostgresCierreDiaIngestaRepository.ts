@@ -19,7 +19,7 @@ import {
   RollbackTransactionCommand,
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
-import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
+import { ParametrosInvalidosError, conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { CierreDiaResumenDTO } from '@fuelhub/shared-kernel';
 import type { AdministradorInput } from '../../domain/CierreDiaInput';
 import type { CierreDiaIngestaRepository, DatosCierreDiaAInsertar } from '../../application/ports/CierreDiaIngestaRepository';
@@ -34,13 +34,13 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
   constructor(private readonly client: RDSDataClient, private readonly config: AuroraDataApiConfig) {}
 
   async registrar(datos: DatosCierreDiaAInsertar): Promise<{ dto: CierreDiaResumenDTO; estacionId: string }> {
-    const inicio = await this.client.send(
+    const inicio = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new BeginTransactionCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
         database: this.config.database,
       })
-    );
+    ));
     const transactionId = inicio.transactionId;
     if (!transactionId) {
       throw new Error('RDS Data API no devolvió transactionId al iniciar la transacción.');
@@ -63,13 +63,13 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
 
       const cabecera = await this.insertarCabecera(datos, estacionId, usuarioId, transactionId);
 
-      await this.client.send(
+      await conReintentoSiDbEstaResumiendo(() => this.client.send(
         new CommitTransactionCommand({
           resourceArn: this.config.resourceArn,
           secretArn: this.config.secretArn,
           transactionId,
         })
-      );
+      ));
 
       const dto: CierreDiaResumenDTO = {
         id: cabecera.id,
@@ -161,7 +161,7 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[], transactionId: string): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -171,7 +171,7 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
         transactionId,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

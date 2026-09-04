@@ -34,7 +34,7 @@ import {
   RollbackTransactionCommand,
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
-import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
+import { ParametrosInvalidosError, conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { CategoriaProducto, CierreTurnoDetalleDTO, DetalleLinea, Pago } from '@fuelhub/shared-kernel';
 import type { DetalleLineaInput, EmpleadoInput, PagoInput } from '../../domain/CierreTurnoInput';
 import type { CierreTurnoIngestaRepository, DatosCierreTurnoAInsertar } from '../../application/ports/CierreTurnoIngestaRepository';
@@ -49,13 +49,13 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
   constructor(private readonly client: RDSDataClient, private readonly config: AuroraDataApiConfig) {}
 
   async registrar(datos: DatosCierreTurnoAInsertar): Promise<CierreTurnoDetalleDTO> {
-    const inicio = await this.client.send(
+    const inicio = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new BeginTransactionCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
         database: this.config.database,
       })
-    );
+    ));
     const transactionId = inicio.transactionId;
     if (!transactionId) {
       throw new Error('RDS Data API no devolvió transactionId al iniciar la transacción.');
@@ -82,13 +82,13 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
       const pagos = await this.insertarPagos(cabecera.id, datos.pagos, transactionId);
       const detalle = await this.insertarDetalle(cabecera.id, datos.detalle, categoriaPorProductoId, transactionId);
 
-      await this.client.send(
+      await conReintentoSiDbEstaResumiendo(() => this.client.send(
         new CommitTransactionCommand({
           resourceArn: this.config.resourceArn,
           secretArn: this.config.secretArn,
           transactionId,
         })
-      );
+      ));
 
       return {
         id: cabecera.id,
@@ -301,7 +301,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[], transactionId: string): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -311,7 +311,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
         transactionId,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

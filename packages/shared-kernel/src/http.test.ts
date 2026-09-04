@@ -6,6 +6,7 @@
 // y repetible en el repo, para que una regresión futura la rompa en CI, no
 // en producción. `mapErrorToResponse` no se había probado todavía.
 
+import { DatabaseResumingException } from '@aws-sdk/client-rds-data';
 import { AccesoDenegadoEstacionError, ParametrosInvalidosError, RecursoNoEncontradoError } from './errors';
 import { downgradeReplayStatusTo200, mapErrorToResponse } from './http';
 
@@ -64,5 +65,13 @@ describe('mapErrorToResponse', () => {
     const body = JSON.parse(res.body);
     expect(body.error).toBe('ERROR_INTERNO');
     expect(body.message).not.toContain('sensible de Postgres');
+  });
+
+  it('mapea DatabaseResumingException a 503 con Retry-After, NO al 500 genérico (v1.62)', () => {
+    const err = new DatabaseResumingException({ message: 'resuming', $metadata: {} });
+    const res = mapErrorToResponse(err);
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['Retry-After']).toBe('5');
+    expect(JSON.parse(res.body).error).toBe('BASE_DE_DATOS_REANUDANDO');
   });
 });

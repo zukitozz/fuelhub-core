@@ -16,6 +16,7 @@
 // consulta-cierres: no hay escritura que proteger).
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
+import { conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { FiltrosReporteMargen, ReporteMargenItemDTO, ReporteMargenQueryRepository } from '../../application/ports/ReporteMargenQueryRepository';
 
 export interface AuroraDataApiConfig {
@@ -114,7 +115,7 @@ export class PostgresReporteMargenQueryRepository implements ReporteMargenQueryR
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[]): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -123,7 +124,7 @@ export class PostgresReporteMargenQueryRepository implements ReporteMargenQueryR
         parameters,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

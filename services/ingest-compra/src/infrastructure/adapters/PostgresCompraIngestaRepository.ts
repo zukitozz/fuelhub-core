@@ -15,7 +15,7 @@ import {
   RollbackTransactionCommand,
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
-import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
+import { ParametrosInvalidosError, conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { CompraIngestaRepository, CompraOutputDTO, DatosCompraAInsertar } from '../../application/ports/CompraIngestaRepository';
 
 export interface AuroraDataApiConfig {
@@ -28,13 +28,13 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
   constructor(private readonly client: RDSDataClient, private readonly config: AuroraDataApiConfig) {}
 
   async registrar(datos: DatosCompraAInsertar): Promise<CompraOutputDTO> {
-    const inicio = await this.client.send(
+    const inicio = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new BeginTransactionCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
         database: this.config.database,
       })
-    );
+    ));
     const transactionId = inicio.transactionId;
     if (!transactionId) {
       throw new Error('RDS Data API no devolvió transactionId al iniciar la transacción.');
@@ -66,13 +66,13 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
 
       const cabecera = await this.insertarCompra(datos, estacionId, transactionId);
 
-      await this.client.send(
+      await conReintentoSiDbEstaResumiendo(() => this.client.send(
         new CommitTransactionCommand({
           resourceArn: this.config.resourceArn,
           secretArn: this.config.secretArn,
           transactionId,
         })
-      );
+      ));
 
       return cabecera;
     } catch (err) {
@@ -153,7 +153,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[], transactionId: string): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -163,7 +163,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         transactionId,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

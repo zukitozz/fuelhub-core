@@ -50,13 +50,22 @@ import { type BundlingOptions, NodejsFunction } from 'aws-cdk-lib/aws-lambda-nod
 // ni siquiera el "best effort" de la publicación a EventBridge llega a
 // correr si el timeout pega antes).
 //
-// 10 segundos: suficiente margen para el camino real de estos handlers
-// (parseo + 1-2 llamadas a RDS Data API, a veces con el UPSERT de
-// auto-provisioning de `usuarios`, más — en ingest-cierre-dia — un PutEvents
-// a EventBridge) sin ser tan largo como para esconder un problema real de
-// rendimiento. Se puede overridear por endpoint con `timeout` si alguno lo
-// necesita distinto.
-const DEFAULT_TIMEOUT = Duration.seconds(10);
+// Subido de 10s a 20s en v1.62, junto con `conReintentoSiDbEstaResumiendo`
+// (`packages/shared-kernel/src/rds-retry.ts`): TODOS estos handlers tocan
+// el mismo cluster de Aurora Serverless v2 en modo scale-to-zero (sección
+// 2.5/10.2), así que TODOS pueden pegarle a un `DatabaseResumingException`
+// si el cluster estaba en 0 ACU, no solo el endpoint de reportes/PDF que ya
+// tenía su propio override de 20s. El presupuesto de reintento interno de
+// `rds-retry.ts` (~7s de backoff) necesita margen del lado del timeout del
+// Lambda para poder completarse antes de que AWS lo mate a la fuerza -- con
+// 10s ese margen casi no existía. 20s sigue bien por debajo del límite duro
+// de integración de API Gateway (29s) y deja espacio de sobra para el resto
+// del camino real (parseo + 1-2 llamadas a RDS Data API, a veces con el
+// UPSERT de auto-provisioning de `usuarios`, más — en ingest-cierre-dia —
+// un PutEvents a EventBridge) sin ser tan largo como para esconder un
+// problema real de rendimiento no relacionado con el resume de la base. Se
+// puede overridear por endpoint con `timeout` si alguno lo necesita distinto.
+const DEFAULT_TIMEOUT = Duration.seconds(20);
 
 export interface AuthenticatedEndpointProps {
   readonly api: RestApi;

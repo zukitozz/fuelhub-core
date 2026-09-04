@@ -11,6 +11,7 @@
 // queda como decisión de implementación, no cambia el contrato del puerto.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
+import { conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { ParametrosPaginacion, ResultadoPaginado } from '../../domain/value-objects/Paginacion';
 import type {
   CierreTurnoQueryRepository,
@@ -67,7 +68,7 @@ export class PostgresCierreTurnoQueryRepository implements CierreTurnoQueryRepos
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[]): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -76,7 +77,7 @@ export class PostgresCierreTurnoQueryRepository implements CierreTurnoQueryRepos
         parameters,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

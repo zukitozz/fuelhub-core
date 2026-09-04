@@ -15,7 +15,7 @@ import {
   RollbackTransactionCommand,
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
-import { ParametrosInvalidosError, RecursoNoEncontradoError } from '@fuelhub/shared-kernel';
+import { ParametrosInvalidosError, RecursoNoEncontradoError, conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { CambiosTanque, TanqueDTO, TanqueRepository } from '../../application/ports/TanqueRepository';
 
 export interface AuroraDataApiConfig {
@@ -49,13 +49,13 @@ export class PostgresTanqueRepository implements TanqueRepository {
   }
 
   async actualizar(id: string, cambios: CambiosTanque): Promise<TanqueDTO> {
-    const inicio = await this.client.send(
+    const inicio = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new BeginTransactionCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
         database: this.config.database,
       })
-    );
+    ));
     const transactionId = inicio.transactionId;
     if (!transactionId) {
       throw new Error('RDS Data API no devolvió transactionId al iniciar la transacción.');
@@ -117,13 +117,13 @@ export class PostgresTanqueRepository implements TanqueRepository {
         throw new RecursoNoEncontradoError('Tanque', id);
       }
 
-      await this.client.send(
+      await conReintentoSiDbEstaResumiendo(() => this.client.send(
         new CommitTransactionCommand({
           resourceArn: this.config.resourceArn,
           secretArn: this.config.secretArn,
           transactionId,
         })
-      );
+      ));
 
       return mapearFila(filaActualizada);
     } catch (err) {
@@ -141,7 +141,7 @@ export class PostgresTanqueRepository implements TanqueRepository {
   }
 
   private async ejecutarSinTransaccion(sql: string, parameters: SqlParameter[]): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -150,12 +150,12 @@ export class PostgresTanqueRepository implements TanqueRepository {
         parameters,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[], transactionId: string): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -165,7 +165,7 @@ export class PostgresTanqueRepository implements TanqueRepository {
         transactionId,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

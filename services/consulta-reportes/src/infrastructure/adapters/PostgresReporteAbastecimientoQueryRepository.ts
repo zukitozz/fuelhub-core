@@ -27,6 +27,7 @@
 // Solo lectura, sin transacción explícita.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
+import { conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type {
   FiltrosReporteAbastecimiento,
   ReporteAbastecimientoItemDTO,
@@ -115,7 +116,7 @@ export class PostgresReporteAbastecimientoQueryRepository implements ReporteAbas
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[]): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -124,7 +125,7 @@ export class PostgresReporteAbastecimientoQueryRepository implements ReporteAbas
         parameters,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }

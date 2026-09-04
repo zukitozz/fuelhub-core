@@ -14,6 +14,7 @@
 // `calibracion_cantidad`, `calibracion_soles`, `despacho_cantidad`, `despacho_soles`.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
+import { conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
 import type { CategoriaProducto, CierreTurnoDetalleDTO, DetalleLinea, Pago } from '@fuelhub/shared-kernel';
 import type { CierreTurnoDetalleRepository } from '../../application/ports/CierreTurnoDetalleRepository';
 
@@ -62,7 +63,7 @@ export class PostgresCierreTurnoDetalleRepository implements CierreTurnoDetalleR
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[]): Promise<Record<string, unknown>[]> {
-    const resultado = await this.client.send(
+    const resultado = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new ExecuteStatementCommand({
         resourceArn: this.config.resourceArn,
         secretArn: this.config.secretArn,
@@ -71,7 +72,7 @@ export class PostgresCierreTurnoDetalleRepository implements CierreTurnoDetalleR
         parameters,
         formatRecordsAs: 'JSON',
       })
-    );
+    ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
 }
