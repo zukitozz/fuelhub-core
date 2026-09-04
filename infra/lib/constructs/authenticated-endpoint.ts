@@ -25,6 +25,7 @@
 // permisos posibles de cada microservicio (principio de mínimo privilegio,
 // sección 6.2 — cada Lambda solo recibe los grants que su propio código usa).
 
+import { Duration } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
   AuthorizationType,
@@ -35,6 +36,27 @@ import {
 } from 'aws-cdk-lib/aws-apigateway';
 import { type IFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+
+// DEFAULT_TIMEOUT -- v1.60, hallazgo real en vivo (2026-09-04): ningún
+// Lambda de este Construct traía nunca un `timeout` explícito, así que TODOS
+// corrían con el default de AWS Lambda a secas -- 3 SEGUNDOS. Se descubrió
+// leyendo los logs reales de CloudWatch de `ingest-cierre-dia` en prod: 2 de
+// 3 invocaciones recientes terminaron en "Status: timeout" a exactamente
+// 3000ms, con la 3ra pasando raspando en 2388ms. Nada de esto es nuevo de
+// hoy -- viene desde que existe este Construct, afecta a TODOS los
+// endpoints (no solo cierres-dia), y probablemente ya venía causando fallas
+// intermitentes en producción sin que nada lo señalara como error de código
+// (un timeout mata el Lambda a la fuerza, sin pasar por ningún try/catch --
+// ni siquiera el "best effort" de la publicación a EventBridge llega a
+// correr si el timeout pega antes).
+//
+// 10 segundos: suficiente margen para el camino real de estos handlers
+// (parseo + 1-2 llamadas a RDS Data API, a veces con el UPSERT de
+// auto-provisioning de `usuarios`, más — en ingest-cierre-dia — un PutEvents
+// a EventBridge) sin ser tan largo como para esconder un problema real de
+// rendimiento. Se puede overridear por endpoint con `timeout` si alguno lo
+// necesita distinto.
+const DEFAULT_TIMEOUT = Duration.seconds(10);
 
 export interface AuthenticatedEndpointProps {
   readonly api: RestApi;
@@ -72,6 +94,13 @@ export interface AuthenticatedEndpointProps {
   readonly projectRoot?: string;
   /** Ver `projectRoot` — mismo criterio, explícito en vez de por búsqueda desde el cwd. */
   readonly depsLockFilePath?: string;
+  /**
+   * Timeout del Lambda. Solo aplica cuando se crea una función nueva (se
+   * ignora si se pasa `fn`, igual que `environment`/`projectRoot`). Default
+   * `DEFAULT_TIMEOUT` (10s) si no se pasa — ver la nota de cabecera de este
+   * archivo (v1.60) sobre por qué hacía falta un default explícito.
+   */
+  readonly timeout?: Duration;
 }
 
 export class AuthenticatedEndpoint extends Construct {
@@ -87,9 +116,9 @@ export class AuthenticatedEndpoint extends Construct {
     super(scope, id);
 
     if (props.fn) {
-      if (props.entry !== undefined || props.environment !== undefined) {
+      if (props.entry !== undefined || props.environment !== undefined || props.timeout !== undefined) {
         throw new Error(
-          `AuthenticatedEndpoint "${id}": se pasó "fn" (Lambda a reusar) junto con "entry"/"environment" — son mutuamente excluyentes. Si la intención es reusar un Lambda ya creado, no pasar "entry" ni "environment"; si la intención es crear uno nuevo, no pasar "fn".`
+          `AuthenticatedEndpoint "${id}": se pasó "fn" (Lambda a reusar) junto con "entry"/"environment"/"timeout" — son mutuamente excluyentes. Si la intención es reusar un Lambda ya creado, no pasar "entry", "environment" ni "timeout" (el timeout ya lo tiene el Lambda reusado); si la intención es crear uno nuevo, no pasar "fn".`
         );
       }
       this.fn = props.fn;
@@ -112,6 +141,7 @@ export class AuthenticatedEndpoint extends Construct {
         environment: props.environment,
         projectRoot: props.projectRoot,
         depsLockFilePath: props.depsLockFilePath,
+        timeout: props.timeout ?? DEFAULT_TIMEOUT,
         bundling: { minify: true, sourceMap: true },
       });
     }
