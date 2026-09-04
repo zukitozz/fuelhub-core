@@ -35,6 +35,13 @@ class RepoFake implements ReporteDiaQueryRepository {
     this.ultimosFiltros = filtros;
     return this.resultado;
   }
+  // No lo usa ninguno de los tests de este archivo (todos son de estación
+  // única) -- agregado solo para satisfacer la interfaz desde que
+  // ObtenerReporteDiaDocumento (v1.60) la necesita. Ver
+  // ObtenerReporteDiaDocumento.test.ts para los tests que sí la ejercitan.
+  async listarCodigosEstacionesActivas(): Promise<string[]> {
+    return [];
+  }
 }
 
 describe('ObtenerReporteDia', () => {

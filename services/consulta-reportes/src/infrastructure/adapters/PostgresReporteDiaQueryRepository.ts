@@ -94,6 +94,14 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
     };
   }
 
+  // listarCodigosEstacionesActivas -- v1.60, ver el comentario del método en
+  // el puerto (ReporteDiaQueryRepository.ts). Solo lo usa el reporte
+  // consolidado de GET /reportes/dia/documento.
+  async listarCodigosEstacionesActivas(): Promise<string[]> {
+    const filas = await this.ejecutar('SELECT codigo FROM estaciones WHERE activo = TRUE ORDER BY codigo', []);
+    return filas.map((fila) => String(fila.codigo));
+  }
+
   private async obtenerCierreDia(parametros: SqlParameter[]): Promise<{ id: string; total: number } | null> {
     // ORDER BY + LIMIT 1 defensivo: `cierres_dia` no tiene un UNIQUE
     // (estacion_id, fecha_negocio) — solo `clave_idempotencia` es única — así

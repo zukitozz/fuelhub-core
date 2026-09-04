@@ -12,10 +12,11 @@
 // Cognito, sobre el User Pool ya existente — ver la nota grande en
 // `auth-stack.ts`).
 
-import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as events from 'aws-cdk-lib/aws-events';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import * as path from 'node:path';
 import { AuthenticatedEndpoint } from '../constructs/authenticated-endpoint';
@@ -46,6 +47,12 @@ const SERVICES_ROOT = path.join(REPO_ROOT, 'services');
 const DEPS_LOCK_FILE_PATH = path.join(REPO_ROOT, 'package-lock.json');
 function entryDe(servicio: string): string {
   return path.join(SERVICES_ROOT, servicio, 'src', 'handler.ts');
+}
+// entryDocumentoDe -- v1.60, GET /reportes/dia/documento: Lambda separado con
+// su propio entry (handler-documento.ts, no handler.ts) -- ver la nota
+// grande junto a `ConsultaReportesDiaDocumento` más abajo sobre por qué.
+function entryDocumentoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-documento.ts');
 }
 
 export interface ApiStackProps extends StackProps {
@@ -255,13 +262,42 @@ export class ApiStack extends Stack {
       requiredScope: 'fuelhub-api/cierres.read',
     });
 
-    // TODO (v1.58, pendiente de v1.57 punto 4): cuando Jorge cree el scope
-    // Cognito `fuelhub-api/reportes.read` y el App Client `notificaciones-whatsapp`
-    // (solo lectura, sin `cierres.write` ni `station.*`), migrar este
-    // `requiredScope` de `cierres.read` a `reportes.read` — hoy se deja en
+    // NOTA (v1.60, corrige un supuesto del TODO de v1.58 de abajo): ese TODO
+    // decía que el App Client `notificaciones-whatsapp` se crearía "sin
+    // `station.*`" -- eso NO es viable con el Pre Token Generation Lambda
+    // real (`services/auth-pre-token-generation/src/handler.ts`, 9.2.2): ese
+    // trigger EXIGE que el App Client pida al menos un scope
+    // `fuelhub-api/station.<algo>` en la solicitud de token y hace `throw`
+    // si no encuentra ninguno -- ningún App Client sin scope de estación
+    // puede obtener token, sea cual sea su intención de solo-lectura.
+    //
+    // Camino verificado (no aplicado todavía -- decisión de Jorge pendiente,
+    // ver también la nota de scopes en `auth-stack.ts`): si se opta por un
+    // único App Client "admin" de solo lectura para `notificaciones-whatsapp`
+    // en vez de reusar las 4 credenciales por estación que ya existen, se
+    // resuelve SOLO con configuración de Cognito, sin tocar el Lambda ni
+    // este archivo: agregar el scope `fuelhub-api/station.*` (wildcard) al
+    // Resource Server, y darle ese scope + `cierres.read` al App Client
+    // nuevo. El Lambda ya toma "lo que sigue después de `station.`" como
+    // `custom:station_scope` sin ningún caso especial -- con `station.*`
+    // eso da literalmente `custom:station_scope: '*'`, que
+    // `hasAccessToStation`/`estacionUnicaDelToken`
+    // (`packages/shared-kernel/src/AuthContext.ts`) ya interpretan como
+    // acceso a cualquier estación. La alternativa (usar directo las 4
+    // credenciales por estación ya existentes desde el lado de
+    // `notificaciones-whatsapp`, sin crear ningún cliente nuevo) no requiere
+    // ningún cambio acá ni en Cognito -- sigue evaluándose cuál conviene.
+    //
+    // TODO (v1.58, pendiente de v1.57 punto 4): si en algún momento se crea
+    // el scope Cognito `fuelhub-api/reportes.read`, migrar este
+    // `requiredScope` de `cierres.read` a `reportes.read` -- hoy se deja en
     // `cierres.read` a propósito para que sea probable de inmediato con
     // credenciales ya existentes (p. ej. `fuelhub-smoketest`) sin bloquear
     // esta entrega a que el trabajo de Cognito en consola esté listo primero.
+    // OJO: migrar esto rompería a los 4 App Clients reales ya en producción
+    // (CHANCAYLLO, MALA, ANDAHUASI, PACHACUTEC) a menos que también se les
+    // agregue el scope nuevo primero -- cambio de mayor alcance, no atado a
+    // esta entrega.
     new AuthenticatedEndpoint(this, 'ConsultaReportesDia', {
       api,
       authorizer,
@@ -271,8 +307,57 @@ export class ApiStack extends Stack {
       requiredScope: 'fuelhub-api/cierres.read',
     });
 
+    // --- consulta-reportes: GET /reportes/dia/documento (v1.60) ----------------
+    // Variante de /reportes/dia que en vez de JSON devuelve una URL firmada
+    // de S3 a un PDF ya renderizado -- contrato acordado con Jorge para que
+    // `notificaciones-whatsapp` lo mande directo como adjunto por WhatsApp
+    // Cloud API (que pide la URL sin poder mandar headers custom, de ahí que
+    // sea una URL PRESIGNADA, no un endpoint autenticado). Lambda separado
+    // del resto de `consulta-reportes` (`fn` propio, no se pasa `fn:
+    // consultaReportesMargen.fn` como con margen/abastecimiento/dia): trae
+    // dependencias (pdfkit, @aws-sdk/client-s3, s3-request-presigner) y un
+    // timeout más largo que los otros 3 (generar PDF + subir a S3) que no
+    // tiene sentido cargarle a esos Lambdas más livianos.
+    //
+    // Bucket dedicado, sin acceso público (BLOCK_ALL -- la URL firmada es lo
+    // que da acceso, no el bucket), con expiración de objetos a 1 día (cada
+    // PDF se regenera en cada request; no hace falta guardarlos más que eso)
+    // y RemovalPolicy.DESTROY + autoDeleteObjects: a diferencia de
+    // `notificaciones-bus` (recurso compartido y externo a este stack, ver
+    // la nota de arriba), este bucket es propio de este stack y su contenido
+    // es 100% regenerable -- no hay motivo para retenerlo si el stack se
+    // destruye.
+    const reportesDocumentosBucket = new s3.Bucket(this, 'ReportesDocumentosBucket', {
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{ expiration: Duration.days(1) }],
+    });
+
+    const reportesDiaDocumento = reportesDia.addResource('documento');
+
+    const consultaReportesDiaDocumento = new AuthenticatedEndpoint(this, 'ConsultaReportesDiaDocumento', {
+      api,
+      authorizer,
+      resource: reportesDiaDocumento,
+      method: 'GET',
+      entry: entryDocumentoDe('consulta-reportes'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/cierres.read',
+      timeout: Duration.seconds(20),
+      environment: {
+        ...AURORA_ENV,
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+    });
+
+    reportesDocumentosBucket.grantReadWrite(consultaReportesDiaDocumento.fn);
+
     // --- Grants IAM (sección 6.2, principio de mínimo privilegio) --------------
-    // 7 Lambdas reales en total (los 3 pares de arriba comparten `fn`).
+    // 8 Lambdas reales en total (los 3 pares de arriba comparten `fn`; v1.60
+    // suma `consultaReportesDiaDocumento`, que SÍ es un Lambda propio -- no
+    // comparte `fn` con nadie, ver la nota grande de arriba).
 
     for (const endpoint of [
       ingestCierreTurno,
@@ -281,7 +366,8 @@ export class ApiStack extends Stack {
       consultaCierresTurno, // cubre también ConsultaCierresDia (mismo fn)
       consultaCierreTurnoDetalle,
       adminTanquesListar, // cubre también AdminTanquesActualizar (mismo fn)
-      consultaReportesMargen, // cubre también ConsultaReportesAbastecimiento (mismo fn)
+      consultaReportesMargen, // cubre también ConsultaReportesAbastecimiento y ConsultaReportesDia (mismo fn)
+      consultaReportesDiaDocumento, // v1.60 -- fn propio, ver nota de arriba
     ]) {
       dataStack.cluster.grantDataApiAccess(endpoint.fn);
     }

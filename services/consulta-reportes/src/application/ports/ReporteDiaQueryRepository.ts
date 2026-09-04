@@ -49,4 +49,15 @@ export interface FiltrosReporteDia {
 export interface ReporteDiaQueryRepository {
   /** `null` cuando no existe un `cierres_dia` ACTIVO para esa estación+fecha (día aún no cerrado, o anulado). */
   obtener(filtros: FiltrosReporteDia): Promise<ReporteDiaDTO | null>;
+
+  /**
+   * Códigos de TODAS las estaciones activas (`estaciones.activo = true`),
+   * sin relación con ningún token en particular -- usado solo por
+   * `ObtenerReporteDiaDocumento` (v1.60) para resolver el reporte
+   * CONSOLIDADO cuando el token que llama tiene `station_scope = '*'` y no
+   * manda `estacionCodigo`: el claim wildcard no trae la lista de códigos en
+   * sí, así que hay que resolverla contra la base. No lo usa `obtener` de
+   * arriba ni ningún otro caso de uso existente.
+   */
+  listarCodigosEstacionesActivas(): Promise<string[]>;
 }

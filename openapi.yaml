@@ -599,6 +599,24 @@ components:
           items:
             $ref: '#/components/schemas/ReporteDiaProducto'
 
+    ReporteDiaDocumento:
+      type: object
+      description: Respuesta de GET /reportes/dia/documento (v1.60) — contrato acordado con notificaciones-whatsapp.
+      required: [url, tipo, expiraEn]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL firmada de S3, descargable sin autenticación adicional. Válida por "expiraEn" segundos desde el momento de esta respuesta.
+        tipo:
+          type: string
+          enum: [application/pdf]
+          description: Content-Type real del archivo en la URL.
+        expiraEn:
+          type: integer
+          description: Segundos de validez de la URL firmada desde el momento de esta respuesta.
+          example: 600
+
     Paginacion:
       type: object
       properties:
@@ -966,6 +984,57 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           description: No existe un cierre de día ACTIVO para esa estación y fecha (día aún no cerrado, o anulado).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /reportes/dia/documento:
+    get:
+      tags: [reportes]
+      summary: Reporte de un día como PDF descargable (uso M2M, notificaciones por WhatsApp)
+      description: >
+        v1.60 — variante de GET /reportes/dia pensada para
+        `notificaciones-whatsapp`: en vez de JSON, devuelve una URL firmada
+        de S3 al PDF ya renderizado, para mandarlo directo como adjunto por
+        WhatsApp Cloud API. Con `estacionCodigo` puntual (o un token de una
+        sola estación que lo omite), el PDF es el reporte de esa estación
+        sola. Sin `estacionCodigo` y con un token cross-estación
+        (multi-estación explícito, o wildcard "*" — hoy solo el App Client
+        `fuelhub-notificaciones-whatsapp`), el PDF consolida TODAS las
+        estaciones a las que el token tiene acceso, en vez del 400 que tira
+        GET /reportes/dia en ese mismo caso. La URL devuelta no requiere
+        autenticación adicional para descargarla y expira a los `expiraEn`
+        segundos. Lambda separado (`consulta-reportes`, `handler-documento.ts`).
+      operationId: obtenerReporteDiaDocumento
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/FechaNegocio'
+        - name: estacionCodigo
+          in: query
+          required: false
+          description: >
+            Igual que en GET /reportes/dia, pero acá omitirlo con un token
+            cross-estación NO es un error: dispara el PDF consolidado de
+            todas las estaciones del token, en vez de un 400.
+          schema:
+            type: string
+          example: "CHANCAYLLO"
+      responses:
+        '200':
+          description: URL firmada al PDF generado (individual o consolidado, según el caso — ver la descripción de arriba).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporteDiaDocumento'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe ningún cierre de día ACTIVO para esa fecha (ni para la estación puntual, ni para ninguna de las estaciones del token en el caso consolidado).
           content:
             application/json:
               schema:
