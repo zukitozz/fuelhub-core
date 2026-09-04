@@ -336,6 +336,21 @@ export class ApiStack extends Stack {
 
     const reportesDiaDocumento = reportesDia.addResource('documento');
 
+    // v1.61 -- bug real de producción, reportado por Jorge al probar este
+    // endpoint recién desplegado: `ENOENT: no such file or directory, open
+    // '/var/task/data/Helvetica.afm'`. Causa: `pdfkit` NO embebe las 14
+    // fuentes estándar de PDF como JS -- son archivos `.afm` (métricas de
+    // texto) que carga en tiempo de ejecución desde `<módulo>/data/*.afm`
+    // (ruta relativa a su propio `__dirname`). `esbuild` (lo que usa
+    // `NodejsFunction` para empaquetar) solo sigue `require`/`import` de
+    // JS -- nunca copia archivos no-JS referenciados así, así que el ZIP
+    // final tenía `index.js` pero ningún `data/`. Pasaba inadvertido en
+    // `cdk synth`/`tsc`/`jest` (los tests unitarios usan fakes, nunca
+    // llaman a pdfkit de verdad) -- solo se manifestaba invocando el Lambda
+    // real. Fix estándar documentado por CDK para este caso exacto:
+    // `bundling.commandHooks.afterBundling` copia `node_modules/pdfkit/js/data`
+    // (con los 14 `.afm`) al bundle de salida, sin depender de que esbuild
+    // lo entienda.
     const consultaReportesDiaDocumento = new AuthenticatedEndpoint(this, 'ConsultaReportesDiaDocumento', {
       api,
       authorizer,
@@ -349,6 +364,19 @@ export class ApiStack extends Stack {
       environment: {
         ...AURORA_ENV,
         REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+      bundling: {
+        commandHooks: {
+          beforeBundling(): string[] {
+            return [];
+          },
+          beforeInstall(): string[] {
+            return [];
+          },
+          afterBundling(inputDir: string, outputDir: string): string[] {
+            return [`cp -r "${inputDir}/node_modules/pdfkit/js/data" "${outputDir}/data"`];
+          },
+        },
       },
     });
 

@@ -35,7 +35,7 @@ import {
   type RestApi,
 } from 'aws-cdk-lib/aws-apigateway';
 import { type IFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
-import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { type BundlingOptions, NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 
 // DEFAULT_TIMEOUT -- v1.60, hallazgo real en vivo (2026-09-04): ningún
 // Lambda de este Construct traía nunca un `timeout` explícito, así que TODOS
@@ -101,6 +101,15 @@ export interface AuthenticatedEndpointProps {
    * archivo (v1.60) sobre por qué hacía falta un default explícito.
    */
   readonly timeout?: Duration;
+  /**
+   * Overrides puntuales de `NodejsFunction.bundling`, mezclados sobre el
+   * default (`{ minify: true, sourceMap: true }`) -- hoy solo lo usa
+   * `consultaReportesDiaDocumento` (v1.61) para el `commandHooks` que copia
+   * los `.afm` de `pdfkit` al bundle (ver la nota grande de `api-stack.ts`
+   * sobre el bug real de producción que esto corrige). Solo aplica cuando
+   * se crea una función nueva (se ignora si se pasa `fn`).
+   */
+  readonly bundling?: Partial<BundlingOptions>;
 }
 
 export class AuthenticatedEndpoint extends Construct {
@@ -116,9 +125,9 @@ export class AuthenticatedEndpoint extends Construct {
     super(scope, id);
 
     if (props.fn) {
-      if (props.entry !== undefined || props.environment !== undefined || props.timeout !== undefined) {
+      if (props.entry !== undefined || props.environment !== undefined || props.timeout !== undefined || props.bundling !== undefined) {
         throw new Error(
-          `AuthenticatedEndpoint "${id}": se pasó "fn" (Lambda a reusar) junto con "entry"/"environment"/"timeout" — son mutuamente excluyentes. Si la intención es reusar un Lambda ya creado, no pasar "entry", "environment" ni "timeout" (el timeout ya lo tiene el Lambda reusado); si la intención es crear uno nuevo, no pasar "fn".`
+          `AuthenticatedEndpoint "${id}": se pasó "fn" (Lambda a reusar) junto con "entry"/"environment"/"timeout"/"bundling" — son mutuamente excluyentes. Si la intención es reusar un Lambda ya creado, no pasar ninguno de esos (el timeout/bundling ya los tiene el Lambda reusado); si la intención es crear uno nuevo, no pasar "fn".`
         );
       }
       this.fn = props.fn;
@@ -142,7 +151,7 @@ export class AuthenticatedEndpoint extends Construct {
         projectRoot: props.projectRoot,
         depsLockFilePath: props.depsLockFilePath,
         timeout: props.timeout ?? DEFAULT_TIMEOUT,
-        bundling: { minify: true, sourceMap: true },
+        bundling: { minify: true, sourceMap: true, ...props.bundling },
       });
     }
 
