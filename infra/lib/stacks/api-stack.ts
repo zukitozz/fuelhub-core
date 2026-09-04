@@ -12,7 +12,7 @@
 // Cognito, sobre el User Pool ya existente — ver la nota grande en
 // `auth-stack.ts`).
 
-import { CfnOutput, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as events from 'aws-cdk-lib/aws-events';
@@ -80,36 +80,21 @@ export class ApiStack extends Stack {
     // alcance de este documento — ver nota en `ingest-cierre-dia`, sección
     // 4.1).
     //
-    // v1.60 -- CAMBIO IMPORTANTE, hallazgo real en vivo (2026-09-04): este
-    // bus se venía SOLO IMPORTANDO por nombre (`fromEventBusName`), nunca
-    // creando -- y resultó que 'notificaciones-bus' NUNCA existió de verdad
-    // en la cuenta (confirmado en la consola de EventBridge, ni en dev ni en
-    // prod: "No hay bus de eventos personalizado"). `fromEventBusName` no
-    // valida que el recurso exista (solo arma un ARN a partir del nombre),
-    // así que el `cdk deploy` nunca falló ni avisó nada -- cada
-    // `PutEvents` de `ingest-cierre-dia` fallaba en silencio en tiempo de
-    // ejecución (best effort, sección 4.1: no rompía el `POST
-    // /cierres-dia`, solo quedaba logueado en CloudWatch).
-    //
-    // Se cambia a CREAR el bus acá (`new events.EventBus`, no
-    // `fromEventBusName`). OJO -- riesgo de colisión de nombre: si el
-    // servicio de notificaciones-whatsapp TAMBIÉN crea un bus con este mismo
-    // nombre en su propio stack de CDK, el deploy de ESE lado va a fallar
-    // (un nombre de bus debe ser único por cuenta+región, y ya lo habría
-    // creado este stack primero). Antes de que notificaciones-whatsapp
-    // despliegue, hay que coordinar quién es el dueño real del bus -- si
-    // terminan siendo ellos, hay que revertir esto a `fromEventBusName`.
-    //
-    // `RemovalPolicy.RETAIN` en prod (`DESTROY` en dev): si este stack se
-    // reemplaza o se borra, las reglas que notificaciones-whatsapp haya
-    // creado sobre este bus no deberían perderse por un cambio de este lado.
+    // v1.60 -- se había cambiado esto por un momento a CREAR el bus acá
+    // (`new events.EventBus`), tras confirmar en la consola de EventBridge
+    // que 'notificaciones-bus' no existía todavía (ni en dev ni en prod) —
+    // hallazgo real en vivo, 2026-09-04. Se revierte a `fromEventBusName`
+    // (import por referencia, no creación) porque el intento de `cdk deploy`
+    // con la versión que lo creaba falló de inmediato con "Resource of type
+    // 'AWS::Events::EventBus' with identifier notificaciones-bus already
+    // exists" — el bus ya existe en la cuenta (se ve que se creó fuera de
+    // este stack, a mano en la consola, entre el hallazgo y este deploy), así
+    // que "crearlo" ya no es lo correcto: `fromEventBusName` es exactamente
+    // lo que hace falta para un recurso que ya existe y no es dueño este
+    // stack. `grantPutEventsTo` funciona igual sobre un bus importado que
+    // sobre uno creado acá, así que el resto del wiring no cambia.
     const notificacionesBusName = (this.node.tryGetContext('notificacionesBusName') as string | undefined) ?? 'notificaciones-bus';
-    const notificacionesBus = new events.EventBus(this, 'NotificacionesBus', {
-      eventBusName: notificacionesBusName,
-    });
-    notificacionesBus.applyRemovalPolicy(
-      props.ambiente === 'prod' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY
-    );
+    const notificacionesBus = events.EventBus.fromEventBusName(this, 'NotificacionesBus', notificacionesBusName);
     new CfnOutput(this, 'NotificacionesBusArn', { value: notificacionesBus.eventBusArn });
 
     const AURORA_ENV = {
