@@ -153,7 +153,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         ]);
       }
 
-      const producto = await this.resolverProducto(datos.productoId ?? null, datos.productoNombre, transactionId);
+      const producto = await this.resolverProducto(datos.productoId ?? null, datos.productoNombre, datos.categoria, transactionId);
       await this.validarDestinos(datos.destinos, transactionId);
 
       const cabecera = await this.insertarCompra(datos, estacionId, producto, transactionId);
@@ -398,9 +398,13 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
    * cliente), `producto_nombre` usa lo que mande el cliente o, si no manda
    * nada, el nombre del catálogo.
    */
-  private async resolverProducto(productoId: string | null, productoNombreCliente: string | null | undefined, transactionId: string): Promise<ProductoResuelto> {
+  private async resolverProducto(productoId: string | null, productoNombreCliente: string | null | undefined, categoriaCliente: CategoriaProducto | null | undefined, transactionId: string): Promise<ProductoResuelto> {
     if (productoId === null) {
-      return { productoId: null, productoNombre: (productoNombreCliente ?? '') as string, categoria: null };
+      // v1.68 fix: `categoria` se estaba perdiendo aquí (regresión de v1.66 al refactorizar
+      // esta función para aceptar parámetros sueltos en vez de `datos` completo) -- para
+      // mercadería, `categoria` SIEMPRE viene del cliente (nunca de un catálogo), a
+      // diferencia de la rama de abajo (productoId de catálogo), donde sí se ignora.
+      return { productoId: null, productoNombre: (productoNombreCliente ?? '') as string, categoria: categoriaCliente ?? null };
     }
 
     const filas = await this.ejecutar(
@@ -428,7 +432,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
    */
   private async resolverProductoParaActualizar(cambios: CambiosCompra, actual: FilaCompra, transactionId: string): Promise<ProductoResuelto> {
     if (cambios.productoId !== undefined) {
-      return this.resolverProducto(cambios.productoId, cambios.productoNombre, transactionId);
+      return this.resolverProducto(cambios.productoId, cambios.productoNombre, cambios.categoria, transactionId);
     }
 
     if (actual.productoId !== null) {
