@@ -24,6 +24,11 @@
 // y dentro de cada grupo, menor autonomía primero (el criterio de orden que
 // sí traía el ejemplo original de 3.8.2.c).
 //
+//   3. `WHERE estado = 'ACTIVO'` en la subquery de `frecuencia_real` (v1.66,
+//      migración 1788300000000) — sin este filtro, una compra anulada
+//      seguiría contando para `LAG(fecha)`/`dias_entre_compras`, distorsionando
+//      la frecuencia real de reabastecimiento.
+//
 // Solo lectura, sin transacción explícita.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
@@ -86,6 +91,7 @@ export class PostgresReporteAbastecimientoQueryRepository implements ReporteAbas
           SELECT estacion_id, producto_id, fecha,
                  LAG(fecha) OVER (PARTITION BY estacion_id, producto_id ORDER BY fecha) AS fecha_anterior
           FROM compras
+          WHERE estado = 'ACTIVO'
         ) sub
         WHERE fecha_anterior IS NOT NULL
         GROUP BY estacion_id, producto_id

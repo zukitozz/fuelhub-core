@@ -5,6 +5,11 @@
 // condicionales (fechaDesde/fechaHasta son opcionales, sección 11.2) y se
 // agrega el filtro por estación puntual o por lista (sección 5.4).
 //
+// v1.66: `compras` suma la columna `estado` (ACTIVO/ANULADO, migración
+// 1788300000000) -- `condicionesCompras` arranca con "c.estado = 'ACTIVO'",
+// mismo criterio que `condicionesVentas` ya usa para `cierres_turno`, para
+// que una compra anulada deje de inflar `costo_promedio`.
+//
 // Nota heredada del ejemplo original (no es una decisión nueva de este
 // adaptador): las ventas de productos NO mapeados al catálogo cruzado
 // (`producto_id IS NULL`, sección 3.8.1.1 — balón de gas, mercadito) sí
@@ -30,7 +35,7 @@ export class PostgresReporteMargenQueryRepository implements ReporteMargenQueryR
 
   async obtener(filtros: FiltrosReporteMargen): Promise<ReporteMargenItemDTO[]> {
     const parametros: SqlParameter[] = [];
-    const condicionesCompras: string[] = [];
+    const condicionesCompras: string[] = ["c.estado = 'ACTIVO'"];
     const condicionesVentas: string[] = ["ct.estado = 'ACTIVO'"];
     const condicionesFinal: string[] = [];
 

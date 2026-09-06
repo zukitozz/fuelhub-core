@@ -12,6 +12,12 @@
 // 1788200000000_extiende-compras-multiproducto-multitanque.sql) — se agrega
 // además un segundo caso con `productoId` ausente (compra de mercadería,
 // sin tanque) para cubrir el otro cambio de esta versión.
+//
+// v1.66: se agregan casos para `obtenerPorId`/`actualizar` (migración
+// 1788300000000_agrega-estado-a-compras.sql) — edición de cabecera, reemplazo
+// completo de `destinos[]` (DELETE + INSERT, se confirma releyendo
+// `compras_abastecimientos`) y la transición ACTIVO -> ANULADO (la primera de
+// todo el repo, sección 3.8.6).
 
 import { PostgresCompraIngestaRepository } from './PostgresCompraIngestaRepository';
 import { cliente, config, ejecutar, primeraEstacionSembrada, primerTanqueDeEstacion, MARCADOR_CI } from '@fuelhub/test-integration-support';
@@ -91,5 +97,91 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
     expect(registrado.categoria).toBe('NO_COMBUSTIBLE');
     expect(registrado.destinos).toEqual([]);
     expect(registrado.merma).toBeNull();
+  }, 30_000);
+
+  it('obtenerPorId relee una compra ya registrada con sus destinos (v1.66)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const tanque = await primerTanqueDeEstacion(estacion.codigo);
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const registrado = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoId: tanque.productoId,
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 200,
+      costoUnitario: 10,
+      destinos: [{ tanqueId: tanque.id, cantidad: 200 }],
+    });
+    idsCreados.push(registrado.id);
+
+    const releido = await ingestaRepo.obtenerPorId(registrado.id);
+    expect(releido).toBeDefined();
+    expect(releido?.id).toBe(registrado.id);
+    expect(releido?.estado).toBe('ACTIVO');
+    expect(releido?.destinos).toEqual([{ tanqueId: tanque.id, cantidad: 200 }]);
+    expect(releido?.merma).toBeCloseTo(0, 3);
+  }, 30_000);
+
+  it('actualizar edita cabecera y reemplaza destinos[] por completo (DELETE + INSERT, v1.66)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const tanque = await primerTanqueDeEstacion(estacion.codigo);
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const registrado = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoId: tanque.productoId,
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 300,
+      costoUnitario: 11,
+      destinos: [{ tanqueId: tanque.id, cantidad: 300 }],
+    });
+    idsCreados.push(registrado.id);
+
+    // Reemplaza proveedor, cantidad y destinos en un solo PUT -- confirma que
+    // la validación de la suma de destinos usa la cantidad NUEVA (280), no la
+    // vieja (300), y que la fila anterior de compras_abastecimientos se borra.
+    const actualizado = await ingestaRepo.actualizar(registrado.id, {
+      proveedor: `${MARCADOR_CI} (editado)`,
+      cantidad: 280,
+      destinos: [{ tanqueId: tanque.id, cantidad: 260 }],
+    });
+
+    expect(actualizado.proveedor).toBe(`${MARCADOR_CI} (editado)`);
+    expect(actualizado.cantidad).toBe(280);
+    expect(actualizado.destinos).toEqual([{ tanqueId: tanque.id, cantidad: 260 }]);
+    expect(actualizado.merma).toBeCloseTo(20, 3);
+
+    const abastecimientos = await ejecutar('SELECT cantidad FROM compras_abastecimientos WHERE compra_id = CAST(:id AS uuid)', [
+      { name: 'id', value: { stringValue: registrado.id } },
+    ]);
+    expect(abastecimientos).toHaveLength(1);
+    expect(Number(abastecimientos[0]?.cantidad)).toBeCloseTo(260, 3);
+  }, 30_000);
+
+  it('actualizar anula una compra (ACTIVO -> ANULADO) sin tocar el resto de campos (v1.66)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const registrado = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoNombre: `${MARCADOR_CI} Aceite de motor`,
+      categoria: 'NO_COMBUSTIBLE',
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 10,
+      costoUnitario: 25,
+    });
+    idsCreados.push(registrado.id);
+    expect(registrado.estado).toBe('ACTIVO');
+
+    const anulado = await ingestaRepo.actualizar(registrado.id, { estado: 'ANULADO' });
+
+    expect(anulado.estado).toBe('ANULADO');
+    // El resto de la cabecera no cambia -- este PUT solo tocó `estado`.
+    expect(anulado.proveedor).toBe(MARCADOR_CI);
+    expect(anulado.cantidad).toBe(10);
+    expect(anulado.productoNombre).toBe(`${MARCADOR_CI} Aceite de motor`);
   }, 30_000);
 });

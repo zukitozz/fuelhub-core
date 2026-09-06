@@ -521,9 +521,60 @@ components:
           description: >
             `cantidad - suma(destinos[].cantidad)` (v1.65) -- `null` si la
             compra no trajo `destinos` (p. ej. mercadería sin tanque).
+        estado:
+          type: string
+          enum: [ACTIVO, ANULADO]
+          description: >
+            v1.66 -- por defecto `ACTIVO` al crear. `PUT /compras/{id}` es el
+            único endpoint del contrato que hoy transiciona ACTIVO -> ANULADO
+            (anulación, no borrado físico -- sección 3.8.6).
         creadoEn:
           type: string
           format: date-time
+
+    CompraUpdateInput:
+      type: object
+      description: >
+        PUT parcial (v1.66) -- al menos un campo debe estar presente. Mismo
+        criterio de "catálogo manda la categoría" que `CompraInput`: si
+        `productoId` se manda como `null` (pasar a mercadería) o la compra ya
+        era mercadería, `productoNombre`/`categoria` se pueden editar; si la
+        compra sigue ligada a catálogo, `categoria` se ignora en silencio.
+        Cuando se manda `destinos`, REEMPLAZA por completo el reparto anterior
+        (no hace upsert fila por fila) y su suma se valida contra la `cantidad`
+        vigente de la compra (la nueva, si también se manda en este mismo PUT).
+      properties:
+        productoId:
+          type: string
+          format: uuid
+          nullable: true
+        productoNombre:
+          type: string
+        categoria:
+          type: string
+          enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+          nullable: true
+        proveedor:
+          type: string
+          nullable: true
+        fecha:
+          type: string
+          format: date-time
+        cantidad:
+          type: number
+        costoUnitario:
+          type: number
+        numeroGuia:
+          type: string
+          nullable: true
+        destinos:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompraDestino'
+        estado:
+          type: string
+          enum: [ACTIVO, ANULADO]
+          description: Anular (o reactivar) la compra -- sección 3.8.6.
 
     TanqueUpdateInput:
       type: object
@@ -968,6 +1019,47 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /compras/{id}:
+    put:
+      tags: [compras]
+      summary: Editar o anular una compra (PUT parcial)
+      description: >
+        v1.66 -- edita cabecera y/o reemplaza por completo el reparto a
+        tanques (`destinos[]`), y también anula la compra (`estado:
+        ANULADO`) en el mismo PUT parcial -- mismo criterio que
+        `PUT /tanques/{id}` usa para `activo`. No hay borrado físico. Lambda
+        `ingest-compra` (comparte función con `POST /compras`).
+      operationId: actualizarCompra
+      x-required-scope: fuelhub-api/cierres.write
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompraUpdateInput'
+      responses:
+        '200':
+          description: Compra actualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompraOutput'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /tanques:
     get:

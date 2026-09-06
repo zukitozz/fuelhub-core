@@ -147,9 +147,14 @@ export class ApiStack extends Stack {
       },
     });
 
-    // --- ingest-compra: POST /compras --------------------------------------------
+    // --- ingest-compra: POST /compras + PUT /compras/{id} -----------------------
+    // v1.66: PUT /compras/{id} agrega edición parcial + anulación (estado,
+    // sección 3.8.6) -- reusa el mismo Lambda que POST /compras (mismo
+    // criterio que admin-tanques: GET /tanques + PUT /tanques/{id}
+    // comparten `fn` porque operan sobre el mismo agregado y bajo volumen).
 
     const compras = api.root.getResource('v1')!.addResource('compras');
+    const compraId = compras.addResource('{id}');
 
     const ingestCompra = new AuthenticatedEndpoint(this, 'IngestCompra', {
       api,
@@ -161,6 +166,15 @@ export class ApiStack extends Stack {
       depsLockFilePath: DEPS_LOCK_FILE_PATH,
       requiredScope: 'fuelhub-api/cierres.write',
       environment: AURORA_ENV,
+    });
+
+    new AuthenticatedEndpoint(this, 'IngestCompraActualizar', {
+      api,
+      authorizer,
+      resource: compraId,
+      method: 'PUT',
+      fn: ingestCompra.fn,
+      requiredScope: 'fuelhub-api/cierres.write',
     });
 
     // --- consulta-cierres: GET /cierres-turno + GET /cierres-dia ---------------
@@ -383,14 +397,16 @@ export class ApiStack extends Stack {
     reportesDocumentosBucket.grantReadWrite(consultaReportesDiaDocumento.fn);
 
     // --- Grants IAM (sección 6.2, principio de mínimo privilegio) --------------
-    // 8 Lambdas reales en total (los 3 pares de arriba comparten `fn`; v1.60
+    // 8 Lambdas reales en total (los 4 pares de arriba comparten `fn`; v1.60
     // suma `consultaReportesDiaDocumento`, que SÍ es un Lambda propio -- no
-    // comparte `fn` con nadie, ver la nota grande de arriba).
+    // comparte `fn` con nadie, ver la nota grande de arriba). v1.66 agrega
+    // IngestCompraActualizar (PUT /compras/{id}), que reusa `ingestCompra.fn`
+    // -- no suma un Lambda nuevo a la lista de abajo.
 
     for (const endpoint of [
       ingestCierreTurno,
       ingestCierreDia,
-      ingestCompra,
+      ingestCompra, // cubre también IngestCompraActualizar (mismo fn)
       consultaCierresTurno, // cubre también ConsultaCierresDia (mismo fn)
       consultaCierreTurnoDetalle,
       adminTanquesListar, // cubre también AdminTanquesActualizar (mismo fn)
