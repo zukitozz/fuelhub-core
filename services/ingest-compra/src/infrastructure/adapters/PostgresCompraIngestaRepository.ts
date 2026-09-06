@@ -61,6 +61,17 @@
 //     distinción ("destinos ausente" vs. "destinos vacío") que
 //     `obtenerPorId`/`actualizar` no pueden replicar al leer filas ya
 //     guardadas.
+//
+// v1.67 (GET /compras) -- se agrega `listar`, mismo patrón de paginación
+// (COUNT + LIMIT/OFFSET) que `PostgresCierreTurnoQueryRepository`
+// (consulta-cierres): dos queries en paralelo contra la misma condición
+// `WHERE`, una trae la página de filas y la otra el total. La merma por fila
+// se calcula con un LEFT JOIN a un agregado de `compras_abastecimientos`
+// (suma + conteo de filas por `compra_id`) en vez de traer cada destino
+// individual -- el listado no expone `destinos[]` (ver `CompraResumenDTO`),
+// así que no hace falta la fila a fila, solo el total repartido y si hubo
+// alguna fila (para distinguir "sin destinos" de "repartido completo", igual
+// que `calcularMerma`).
 
 import {
   BeginTransactionCommand,
@@ -76,8 +87,11 @@ import type {
   CompraDestinoDTO,
   CompraIngestaRepository,
   CompraOutputDTO,
+  CompraResumenDTO,
   DatosCompraAInsertar,
+  FiltrosCompra,
 } from '../../application/ports/CompraIngestaRepository';
+import type { ParametrosPaginacion, ResultadoPaginado } from '../../domain/value-objects/Paginacion';
 
 export interface AuroraDataApiConfig {
   readonly resourceArn: string;
@@ -187,6 +201,49 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     ).then((filas) => filas.map(mapearFilaDestino));
 
     return mapearCompraCompleta(mapearFilaCompra(fila), destinos);
+  }
+
+  async listar(filtros: FiltrosCompra, paginacion: ParametrosPaginacion): Promise<ResultadoPaginado<CompraResumenDTO>> {
+    const { whereSql, parameters } = construirWhereCompras(filtros);
+    const offset = (paginacion.page - 1) * paginacion.pageSize;
+
+    // LEFT JOIN a un agregado de compras_abastecimientos por compra_id --
+    // NULL (sin filas) cuando la compra no tiene ningún destino registrado,
+    // igual criterio de "null vs. calculada" que `calcularMerma` usa para
+    // `registrar`/`obtenerPorId`/`actualizar` (ver nota de cabecera del archivo).
+    const sqlDatos = `
+      SELECT c.id, e.codigo AS codigo_estacion, c.producto_id, c.producto_nombre, c.categoria,
+             c.proveedor, c.fecha, c.cantidad, c.costo_unitario, c.costo_total, c.numero_guia,
+             c.estado, c.creado_en, ca.cantidad_repartida, ca.filas_destino
+      FROM compras c
+      JOIN estaciones e ON e.id = c.estacion_id
+      LEFT JOIN (
+        SELECT compra_id, SUM(cantidad) AS cantidad_repartida, COUNT(*) AS filas_destino
+        FROM compras_abastecimientos
+        GROUP BY compra_id
+      ) ca ON ca.compra_id = c.id
+      ${whereSql}
+      ORDER BY c.fecha DESC
+      LIMIT :limit OFFSET :offset
+    `;
+
+    const sqlConteo = `
+      SELECT COUNT(*) AS total
+      FROM compras c
+      JOIN estaciones e ON e.id = c.estacion_id
+      ${whereSql}
+    `;
+
+    const [filas, conteo] = await Promise.all([
+      this.ejecutarSinTransaccion(sqlDatos, [...parameters, paramLong('limit', paginacion.pageSize), paramLong('offset', offset)]),
+      this.ejecutarSinTransaccion(sqlConteo, parameters),
+    ]);
+
+    return {
+      data: filas.map(mapearFilaResumen),
+      pagination: { page: paginacion.page, pageSize: paginacion.pageSize, totalItems: leerConteo(conteo), totalPages: 1 },
+      // totalPages real lo termina de calcular el caso de uso (construirPaginacion) con este totalItems.
+    };
   }
 
   async actualizar(id: string, cambios: CambiosCompra): Promise<CompraOutputDTO> {
@@ -543,4 +600,78 @@ function paramText(name: string, value: string | null | undefined): SqlParameter
 function paramDecimal(name: string, value: number | null | undefined): SqlParameter {
   if (value === null || value === undefined) return { name, value: { isNull: true } };
   return { name, value: { stringValue: String(value) }, typeHint: 'DECIMAL' };
+}
+
+function paramLong(name: string, value: number): SqlParameter {
+  return { name, value: { longValue: value } };
+}
+
+/**
+ * `WHERE` de `listar` (v1.67) -- mismo patrón que
+ * `PostgresCierreTurnoQueryRepository.construirWhere` (consulta-cierres):
+ * arma condiciones + parámetros juntos para no desalinearlos.
+ *
+ * `productoId` NO se valida como UUID acá (ni en `ListarCompras`, capa de
+ * aplicación) antes del `CAST` -- mismo comportamiento que el resto del
+ * repo para un `id` de path/filtro mal formado (cae al 500 genérico de
+ * `mapErrorToResponse`, gap preexistente y aceptado en todo el repo, no
+ * introducido por este cambio).
+ */
+function construirWhereCompras(filtros: FiltrosCompra): { whereSql: string; parameters: SqlParameter[] } {
+  const condiciones: string[] = ['c.estado = CAST(:estado AS estado_cierre)'];
+  const parameters: SqlParameter[] = [paramText('estado', filtros.estado)];
+
+  if (filtros.estacionCodigo) {
+    condiciones.push('e.codigo = :estacionCodigo');
+    parameters.push(paramText('estacionCodigo', filtros.estacionCodigo));
+  }
+  // c.fecha es TIMESTAMPTZ (hora exacta de la compra), no DATE -- mismo
+  // criterio que PostgresReporteMargenQueryRepository: "< día siguiente" en
+  // vez de "<= fechaHasta" para incluir el día completo de fechaHasta.
+  if (filtros.fechaDesde) {
+    condiciones.push('c.fecha >= CAST(:fechaDesde AS date)');
+    parameters.push(paramText('fechaDesde', filtros.fechaDesde));
+  }
+  if (filtros.fechaHasta) {
+    condiciones.push("c.fecha < CAST(:fechaHasta AS date) + INTERVAL '1 day'");
+    parameters.push(paramText('fechaHasta', filtros.fechaHasta));
+  }
+  if (filtros.productoId) {
+    condiciones.push('c.producto_id = CAST(:productoId AS uuid)');
+    parameters.push(paramText('productoId', filtros.productoId));
+  }
+  if (filtros.categoria) {
+    condiciones.push('c.categoria = CAST(:categoria AS categoria_producto)');
+    parameters.push(paramText('categoria', filtros.categoria));
+  }
+
+  return { whereSql: `WHERE ${condiciones.join(' AND ')}`, parameters };
+}
+
+function leerConteo(filas: Record<string, unknown>[]): number {
+  const total = filas[0]?.total;
+  return typeof total === 'number' ? total : Number(total ?? 0);
+}
+
+function mapearFilaResumen(fila: Record<string, unknown>): CompraResumenDTO {
+  const filasDestino = Number(fila.filas_destino ?? 0);
+  const cantidad = Number(fila.cantidad);
+  const cantidadRepartida = Number(fila.cantidad_repartida ?? 0);
+
+  return {
+    id: String(fila.id),
+    codigoEstacion: String(fila.codigo_estacion),
+    productoId: fila.producto_id === null || fila.producto_id === undefined ? null : String(fila.producto_id),
+    productoNombre: String(fila.producto_nombre),
+    categoria: (fila.categoria as CategoriaProducto | null | undefined) ?? null,
+    proveedor: fila.proveedor === null || fila.proveedor === undefined ? null : String(fila.proveedor),
+    fecha: String(fila.fecha),
+    cantidad,
+    costoUnitario: Number(fila.costo_unitario),
+    costoTotal: Number(fila.costo_total),
+    numeroGuia: fila.numero_guia === null || fila.numero_guia === undefined ? null : String(fila.numero_guia),
+    merma: filasDestino === 0 ? null : cantidad - cantidadRepartida,
+    estado: fila.estado as EstadoCierre,
+    creadoEn: String(fila.creado_en),
+  };
 }

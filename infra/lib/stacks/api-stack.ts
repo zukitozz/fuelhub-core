@@ -147,11 +147,15 @@ export class ApiStack extends Stack {
       },
     });
 
-    // --- ingest-compra: POST /compras + PUT /compras/{id} -----------------------
+    // --- ingest-compra: POST/GET /compras + PUT/GET /compras/{id} --------------
     // v1.66: PUT /compras/{id} agrega edición parcial + anulación (estado,
     // sección 3.8.6) -- reusa el mismo Lambda que POST /compras (mismo
     // criterio que admin-tanques: GET /tanques + PUT /tanques/{id}
     // comparten `fn` porque operan sobre el mismo agregado y bajo volumen).
+    // v1.67: se agregan GET /compras (listado) y GET /compras/{id} (detalle)
+    // -- gap identificado al construir specs-frontend-fuelhub-web.md
+    // (sección 8.1/8.2): el CRUD del frontend nuevo no tenía forma de leer
+    // compras. Ambas reusan el mismo `fn`, mismo criterio que las de arriba.
 
     const compras = api.root.getResource('v1')!.addResource('compras');
     const compraId = compras.addResource('{id}');
@@ -175,6 +179,24 @@ export class ApiStack extends Stack {
       method: 'PUT',
       fn: ingestCompra.fn,
       requiredScope: 'fuelhub-api/cierres.write',
+    });
+
+    new AuthenticatedEndpoint(this, 'IngestCompraListar', {
+      api,
+      authorizer,
+      resource: compras,
+      method: 'GET',
+      fn: ingestCompra.fn,
+      requiredScope: 'fuelhub-api/cierres.read',
+    });
+
+    new AuthenticatedEndpoint(this, 'IngestCompraObtener', {
+      api,
+      authorizer,
+      resource: compraId,
+      method: 'GET',
+      fn: ingestCompra.fn,
+      requiredScope: 'fuelhub-api/cierres.read',
     });
 
     // --- consulta-cierres: GET /cierres-turno + GET /cierres-dia ---------------
@@ -400,13 +422,15 @@ export class ApiStack extends Stack {
     // 8 Lambdas reales en total (los 4 pares de arriba comparten `fn`; v1.60
     // suma `consultaReportesDiaDocumento`, que SÍ es un Lambda propio -- no
     // comparte `fn` con nadie, ver la nota grande de arriba). v1.66 agrega
-    // IngestCompraActualizar (PUT /compras/{id}), que reusa `ingestCompra.fn`
-    // -- no suma un Lambda nuevo a la lista de abajo.
+    // IngestCompraActualizar (PUT /compras/{id}), y v1.67 agrega
+    // IngestCompraListar/IngestCompraObtener (GET /compras, GET
+    // /compras/{id}) -- las tres reusan `ingestCompra.fn`, ninguna suma un
+    // Lambda nuevo a la lista de abajo.
 
     for (const endpoint of [
       ingestCierreTurno,
       ingestCierreDia,
-      ingestCompra, // cubre también IngestCompraActualizar (mismo fn)
+      ingestCompra, // cubre también IngestCompraActualizar/IngestCompraListar/IngestCompraObtener (mismo fn)
       consultaCierresTurno, // cubre también ConsultaCierresDia (mismo fn)
       consultaCierreTurnoDetalle,
       adminTanquesListar, // cubre también AdminTanquesActualizar (mismo fn)

@@ -7,14 +7,21 @@
 // v1.66: este Lambda pasa a resolver 2 operaciones (POST /compras,
 // PUT /compras/{id}, sección 3.8.6) -- se agregan `extraerId` y
 // `parsearCompraUpdateInput`, mismo patrón que el mapper de `admin-tanques`.
+//
+// v1.67: se agregan las 2 operaciones de lectura (GET /compras, GET
+// /compras/{id}, sección 8.1/8.2 de specs-frontend-fuelhub-web.md) --
+// `mapListarComprasQuery` traduce los query params, mismo criterio que
+// `mapListarCierresTurnoQuery` (consulta-cierres).
 
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
 import type { CompraInput } from '../../domain/CompraInput';
 import type { CompraUpdateInput } from '../../domain/CompraUpdateInput';
+import type { ListarComprasQuery } from '../../application/use-cases/ListarCompras';
 
 export interface ApiGatewayEventLike {
   readonly httpMethod?: string;
   readonly pathParameters?: Record<string, string | undefined> | null;
+  readonly queryStringParameters?: Record<string, string | undefined> | null;
   readonly body?: string | null;
   readonly isBase64Encoded?: boolean;
   readonly requestContext?: { authorizer?: { claims?: Record<string, string> } };
@@ -64,4 +71,18 @@ export function parsearCompraUpdateInput(event: ApiGatewayEventLike): CompraUpda
   }
 
   return json as CompraUpdateInput;
+}
+
+export function mapListarComprasQuery(event: ApiGatewayEventLike): ListarComprasQuery {
+  const qs = event.queryStringParameters ?? {};
+  return {
+    estacionCodigo: qs.estacionCodigo,
+    fechaDesde: qs.fechaDesde,
+    fechaHasta: qs.fechaHasta,
+    estado: qs.estado,
+    productoId: qs.productoId,
+    categoria: qs.categoria,
+    page: qs.page,
+    pageSize: qs.pageSize,
+  };
 }

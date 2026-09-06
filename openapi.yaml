@@ -477,6 +477,54 @@ components:
           items:
             $ref: '#/components/schemas/CompraDestino'
 
+    CompraResumen:
+      type: object
+      description: >
+        Forma resumida usada en el listado (GET /compras, v1.67) -- igual que
+        CompraOutput pero SIN `destinos[]` (mismo criterio que
+        CierreTurnoResumen frente a CierreTurnoDetalleCompleto). El detalle
+        completo, con destinos[], se pide aparte con GET /compras/{id}.
+      properties:
+        id:
+          type: string
+          format: uuid
+        codigoEstacion:
+          type: string
+        productoId:
+          type: string
+          format: uuid
+          nullable: true
+        productoNombre:
+          type: string
+        categoria:
+          type: string
+          enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+          nullable: true
+        proveedor:
+          type: string
+          nullable: true
+        fecha:
+          type: string
+          format: date-time
+        cantidad:
+          type: number
+        costoUnitario:
+          type: number
+        costoTotal:
+          type: number
+        numeroGuia:
+          type: string
+          nullable: true
+        merma:
+          type: number
+          nullable: true
+        estado:
+          type: string
+          enum: [ACTIVO, ANULADO]
+        creadoEn:
+          type: string
+          format: date-time
+
     CompraOutput:
       type: object
       properties:
@@ -1019,8 +1067,96 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [compras]
+      summary: Listar/filtrar compras
+      description: >
+        v1.67 -- gap identificado al construir el frontend de gestión
+        (specs-frontend-fuelhub-web.md, sección 8.1): sin esto, el CRUD de
+        compras no tenía forma de listar/buscar. `merma`/`estado` vienen
+        calculados igual que en `POST`/`PUT /compras/{id}`. Lambda
+        `ingest-compra` (comparte función con el resto de operaciones de
+        `/compras`).
+      operationId: listarCompras
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/EstacionCodigo'
+        - $ref: '#/components/parameters/FechaDesde'
+        - $ref: '#/components/parameters/FechaHasta'
+        - name: estado
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVO, ANULADO]
+            default: ACTIVO
+        - name: productoId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: categoria
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Listado paginado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CompraResumen'
+                  pagination:
+                    $ref: '#/components/schemas/Paginacion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /compras/{id}:
+    get:
+      tags: [compras]
+      summary: Detalle de una compra
+      description: >
+        v1.67 -- incluye `destinos[]` completo (a diferencia de `CompraResumen`
+        del listado). Reusa la misma consulta que ya usaba internamente
+        `PUT /compras/{id}` desde v1.66 para precargar el registro antes de
+        aplicar los cambios -- acá se expone como lectura pública. Lambda
+        `ingest-compra`.
+      operationId: obtenerCompra
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Detalle de la compra.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompraOutput'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
     put:
       tags: [compras]
       summary: Editar o anular una compra (PUT parcial)

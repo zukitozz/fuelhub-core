@@ -18,6 +18,16 @@
 // completo de `destinos[]` (DELETE + INSERT, se confirma releyendo
 // `compras_abastecimientos`) y la transición ACTIVO -> ANULADO (la primera de
 // todo el repo, sección 3.8.6).
+//
+// v1.67: se agregan casos para `listar` (GET /compras) — mismo criterio de
+// "smoke test contra un rango amplio" que ya usan los suites hermanos de
+// `consulta-cierres` para no depender de qué compras existan sembradas hoy
+// en `dev`, más 2 casos precisos que sí importan verificar contra Postgres
+// real: que la merma calculada por el LEFT JOIN agregado de
+// `compras_abastecimientos` (lógica nueva, distinta de la de
+// `registrar`/`obtenerPorId`/`actualizar`, que sí tienen cobertura real
+// desde v1.65/v1.66) da el mismo resultado que esos otros métodos, tanto
+// con destinos parciales (merma > 0) como sin ningún destino (merma null).
 
 import { PostgresCompraIngestaRepository } from './PostgresCompraIngestaRepository';
 import { cliente, config, ejecutar, primeraEstacionSembrada, primerTanqueDeEstacion, MARCADOR_CI } from '@fuelhub/test-integration-support';
@@ -183,5 +193,86 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
     expect(anulado.proveedor).toBe(MARCADOR_CI);
     expect(anulado.cantidad).toBe(10);
     expect(anulado.productoNombre).toBe(`${MARCADOR_CI} Aceite de motor`);
+  }, 30_000);
+
+  it('listar corre sin filtros de fecha y devuelve un resultado paginado (SQL válido, v1.67)', async () => {
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const resultado = await ingestaRepo.listar({ estado: 'ACTIVO' }, { page: 1, pageSize: 20 });
+
+    expect(Array.isArray(resultado.data)).toBe(true);
+    expect(resultado.pagination.page).toBe(1);
+  }, 30_000);
+
+  it('listar corre con fechaDesde/fechaHasta reales, filtrado por estación (regresión del bug de CAST, v1.67)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    // Rango deliberadamente amplio (2000-2099): lo único que este test
+    // confirma es que el SQL corre con fechaDesde/fechaHasta reales sin
+    // reventar -- no depende de qué compras existan sembradas hoy.
+    const resultado = await ingestaRepo.listar(
+      { estado: 'ACTIVO', estacionCodigo: estacion.codigo, fechaDesde: '2000-01-01', fechaHasta: '2099-12-31' },
+      { page: 1, pageSize: 100 }
+    );
+
+    expect(Array.isArray(resultado.data)).toBe(true);
+    expect(resultado.data.every((c) => c.codigoEstacion === estacion.codigo)).toBe(true);
+  }, 30_000);
+
+  it('listar calcula la merma igual que registrar/obtenerPorId para una compra con destinos parciales (v1.67)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const tanque = await primerTanqueDeEstacion(estacion.codigo);
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const registrado = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoId: tanque.productoId,
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 150,
+      costoUnitario: 13,
+      destinos: [{ tanqueId: tanque.id, cantidad: 140 }],
+    });
+    idsCreados.push(registrado.id);
+
+    // Rango de un solo día (hoy) para acotar el listado a lo que este test
+    // acaba de crear, sin depender de qué más exista sembrado en `dev`.
+    const hoy = new Date().toISOString().slice(0, 10);
+    const resultado = await ingestaRepo.listar(
+      { estado: 'ACTIVO', estacionCodigo: estacion.codigo, fechaDesde: hoy, fechaHasta: hoy },
+      { page: 1, pageSize: 100 }
+    );
+
+    const fila = resultado.data.find((c) => c.id === registrado.id);
+    expect(fila).toBeDefined();
+    expect(fila?.merma).toBeCloseTo(10, 3);
+    expect(fila?.estado).toBe('ACTIVO');
+  }, 30_000);
+
+  it('listar devuelve merma null para una compra sin ningún destino (v1.67)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const registrado = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoNombre: `${MARCADOR_CI} Filtro de aceite`,
+      categoria: 'NO_COMBUSTIBLE',
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 6,
+      costoUnitario: 18,
+    });
+    idsCreados.push(registrado.id);
+
+    const hoy = new Date().toISOString().slice(0, 10);
+    const resultado = await ingestaRepo.listar(
+      { estado: 'ACTIVO', estacionCodigo: estacion.codigo, fechaDesde: hoy, fechaHasta: hoy },
+      { page: 1, pageSize: 100 }
+    );
+
+    const fila = resultado.data.find((c) => c.id === registrado.id);
+    expect(fila).toBeDefined();
+    expect(fila?.merma).toBeNull();
   }, 30_000);
 });

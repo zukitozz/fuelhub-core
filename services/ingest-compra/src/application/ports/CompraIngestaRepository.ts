@@ -32,8 +32,18 @@
 // `obtenerPorId`/`actualizar` no pueden replicar (leen filas de
 // `compras_abastecimientos`, no lo que vino en el request) -- ahora los tres
 // métodos usan la misma regla: sin filas = `null`, con filas = calculada.
+//
+// v1.67 -- se agrega `listar` (`GET /compras`, gap identificado al construir
+// `specs-frontend-fuelhub-web.md` sección 8.1: el CRUD de compras no tenía
+// forma de listar/buscar sin esto). Devuelve `CompraResumenDTO` -- mismos
+// campos que `CompraOutputDTO` MENOS `destinos[]` (se omite en el listado
+// por volumen, mismo criterio que `CierreTurnoResumenDTO` omite
+// `detalle`/`pagos` -- el detalle completo se pide aparte con `GET
+// /compras/{id}`, que reusa el `obtenerPorId` de arriba, ya existente desde
+// v1.66 para el flujo interno de `actualizar`).
 
 import type { CategoriaProducto, EstadoCierre } from '@fuelhub/shared-kernel';
+import type { ParametrosPaginacion, ResultadoPaginado } from '../../domain/value-objects/Paginacion';
 
 export interface CompraDestinoDTO {
   readonly tanqueId: string;
@@ -59,6 +69,39 @@ export interface CompraOutputDTO {
   /** v1.66 -- `ANULADO` excluye la compra de reportes/stock (margen, abastecimiento). */
   readonly estado: EstadoCierre;
   readonly creadoEn: string;
+}
+
+/**
+ * Forma resumida para `GET /compras` (v1.67) -- igual que `CompraOutputDTO`
+ * pero sin `destinos[]` (mismo criterio que `CierreTurnoResumenDTO` frente a
+ * `CierreTurnoDetalleCompleto`). Trae `merma`/`estado` porque son justo los
+ * campos que un listado necesita mostrar sin abrir cada compra.
+ */
+export interface CompraResumenDTO {
+  readonly id: string;
+  readonly codigoEstacion: string;
+  readonly productoId: string | null;
+  readonly productoNombre: string;
+  readonly categoria: CategoriaProducto | null;
+  readonly proveedor: string | null;
+  readonly fecha: string;
+  readonly cantidad: number;
+  readonly costoUnitario: number;
+  readonly costoTotal: number;
+  readonly numeroGuia: string | null;
+  readonly merma: number | null;
+  readonly estado: EstadoCierre;
+  readonly creadoEn: string;
+}
+
+/** Filtros de `GET /compras` (v1.67) -- `estacionCodigo` ya resuelto/autorizado por el caso de uso (sección 5.4), igual que `FiltrosCierreTurno`. */
+export interface FiltrosCompra {
+  readonly estacionCodigo?: string;
+  readonly fechaDesde?: string; // YYYY-MM-DD, sobre compras.fecha
+  readonly fechaHasta?: string;
+  readonly estado: EstadoCierre;
+  readonly productoId?: string;
+  readonly categoria?: CategoriaProducto;
 }
 
 export interface DatosCompraAInsertar {
@@ -106,4 +149,7 @@ export interface CompraIngestaRepository {
    * `destinos[].cantidad` supera la cantidad vigente de la compra (v1.66).
    */
   actualizar(id: string, cambios: CambiosCompra): Promise<CompraOutputDTO>;
+
+  /** `GET /compras` (v1.67) -- listado paginado, filtros ya autorizados por el caso de uso. */
+  listar(filtros: FiltrosCompra, paginacion: ParametrosPaginacion): Promise<ResultadoPaginado<CompraResumenDTO>>;
 }

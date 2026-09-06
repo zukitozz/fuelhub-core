@@ -9,7 +9,15 @@
 
 import { AccesoDenegadoEstacionError, ParametrosInvalidosError, RecursoNoEncontradoError, type AuthContext } from '@fuelhub/shared-kernel';
 import { ActualizarCompra } from './ActualizarCompra';
-import type { CambiosCompra, CompraIngestaRepository, CompraOutputDTO, DatosCompraAInsertar } from '../ports/CompraIngestaRepository';
+import type {
+  CambiosCompra,
+  CompraIngestaRepository,
+  CompraOutputDTO,
+  CompraResumenDTO,
+  DatosCompraAInsertar,
+  FiltrosCompra,
+} from '../ports/CompraIngestaRepository';
+import type { ParametrosPaginacion, ResultadoPaginado } from '../../domain/value-objects/Paginacion';
 
 function auth(overrides: Partial<AuthContext> = {}): AuthContext {
   return { clientId: 'test-client', role: 'SISTEMA_GRIFO', stationScope: 'CHANCAYLLO', scopes: [], ...overrides };
@@ -51,6 +59,9 @@ class RepoFake implements CompraIngestaRepository {
     this.idActualizado = id;
     this.cambiosRecibidos = cambios;
     return { ...(this.existente as CompraOutputDTO), ...cambios } as CompraOutputDTO;
+  }
+  async listar(_filtros: FiltrosCompra, _paginacion: ParametrosPaginacion): Promise<ResultadoPaginado<CompraResumenDTO>> {
+    throw new Error('no usado en este test');
   }
 }
 
