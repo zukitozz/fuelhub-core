@@ -400,23 +400,56 @@ components:
           type: string
           format: date-time
 
-    CompraInput:
+    CompraDestino:
       type: object
-      required: [codigoEstacion, productoId, fecha, cantidad, costoUnitario]
+      description: >
+        Reparto físico de una compra a un tanque puntual (v1.65) -- el tanque
+        puede pertenecer a una estación DISTINTA a `codigoEstacion` de la
+        compra (contingencia real: se factura a una estación pero parte del
+        combustible va físicamente a otra estación).
+      required: [tanqueId, cantidad]
       properties:
-        codigoEstacion:
-          type: string
-          example: "CHANCAYLLO"
         tanqueId:
           type: string
           format: uuid
-          nullable: true
-          description: A qué tanque ingresó — opcional (sección 3.3).
+        cantidad:
+          type: number
+          description: En la unidad de `productos_maestro.medida` del producto comprado (GAL o LT) -- sección 3.3.
+          example: 480.000
+
+    CompraInput:
+      type: object
+      required: [codigoEstacion, fecha, cantidad, costoUnitario]
+      properties:
+        codigoEstacion:
+          type: string
+          description: Estación a cuyo RUC/factura corresponde la compra (sección 3.8.1).
+          example: "CHANCAYLLO"
         productoId:
           type: string
           format: uuid
-          description: Obligatorio siempre en compras (sección 3.8.1) — a diferencia del detalle de cierre.
+          nullable: true
+          description: >
+            Opcional desde v1.65. Presente para combustible del catálogo
+            cruzado (sección 3.8.1); ausente para compras fuera de catálogo
+            (mercadería de tienda) -- en ese caso `productoNombre` y
+            `categoria` pasan a ser obligatorios.
           example: "f7ec806f-0e5c-4949-8110-b48469fd3ecf"
+        productoNombre:
+          type: string
+          nullable: true
+          description: >
+            Obligatorio SOLO cuando no se manda `productoId` (v1.65). Con
+            `productoId`, es opcional -- si se omite, se usa el nombre del
+            catálogo.
+          example: "Galletas surtidas"
+        categoria:
+          type: string
+          enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+          nullable: true
+          description: >
+            Obligatorio SOLO cuando no se manda `productoId` (v1.65). Con
+            `productoId`, el catálogo manda y este campo se ignora si se manda.
         proveedor:
           type: string
           nullable: true
@@ -425,7 +458,7 @@ components:
           format: date-time
         cantidad:
           type: number
-          description: En la unidad de `productos_maestro.medida` del producto comprado (GAL o LT) — sección 3.3.
+          description: Total comprado, según factura -- en la unidad de `productos_maestro.medida` del producto (GAL o LT) -- sección 3.3.
           example: 3000.000
         costoUnitario:
           type: number
@@ -433,21 +466,64 @@ components:
         numeroGuia:
           type: string
           nullable: true
+        destinos:
+          type: array
+          description: >
+            Reparto físico a tanques (v1.65) -- reemplaza el `tanqueId` suelto
+            de versiones anteriores. Ausente/vacío = compra sin tanque asociado
+            (p. ej. mercadería). La suma de `destinos[].cantidad` puede ser
+            MENOR que `cantidad` (la diferencia es merma real, no un error) pero
+            nunca MAYOR (se rechaza con `400`).
+          items:
+            $ref: '#/components/schemas/CompraDestino'
 
     CompraOutput:
-      allOf:
-        - $ref: '#/components/schemas/CompraInput'
-        - type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-            costoTotal:
-              type: number
-              description: Columna generada (`cantidad * costoUnitario`) — sección 3.3.
-            creadoEn:
-              type: string
-              format: date-time
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        codigoEstacion:
+          type: string
+        productoId:
+          type: string
+          format: uuid
+          nullable: true
+        productoNombre:
+          type: string
+        categoria:
+          type: string
+          enum: [COMBUSTIBLE, NO_COMBUSTIBLE]
+          nullable: true
+        proveedor:
+          type: string
+          nullable: true
+        fecha:
+          type: string
+          format: date-time
+        cantidad:
+          type: number
+        costoUnitario:
+          type: number
+        costoTotal:
+          type: number
+          description: Columna generada (`cantidad * costoUnitario`) -- sección 3.3.
+        numeroGuia:
+          type: string
+          nullable: true
+        destinos:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompraDestino'
+        merma:
+          type: number
+          nullable: true
+          description: >
+            `cantidad - suma(destinos[].cantidad)` (v1.65) -- `null` si la
+            compra no trajo `destinos` (p. ej. mercadería sin tanque).
+        creadoEn:
+          type: string
+          format: date-time
 
     TanqueUpdateInput:
       type: object
@@ -866,8 +942,11 @@ paths:
       summary: Registrar una compra/abastecimiento
       description: >
         No es idempotente por header (bajo volumen, sin reintentos automáticos
-        esperados) — `productoId` es siempre obligatorio y validado (sección
-        3.8.1). Lambda `ingest-compra`.
+        esperados). Desde v1.65, `productoId` es opcional (compras fuera del
+        catálogo cruzado -- mercadería de tienda -- mandan `productoNombre` +
+        `categoria` en su lugar) y el reparto físico a tanques se declara en
+        `destinos[]`, que puede sumar menos que `cantidad` (la diferencia es
+        merma real). Lambda `ingest-compra`.
       operationId: registrarCompra
       x-required-scope: fuelhub-api/cierres.write
       requestBody:

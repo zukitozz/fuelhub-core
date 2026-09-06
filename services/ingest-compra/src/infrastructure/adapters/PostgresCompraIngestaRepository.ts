@@ -1,11 +1,37 @@
 // infrastructure/adapters/PostgresCompraIngestaRepository.ts
 //
 // Misma estrategia transaccional que los adaptadores de ingesta de cierres
-// (BeginTransaction/Commit/RollbackTransaction explícitos de RDS Data API) —
-// acá con menos pasos: no hay auto-provisioning de usuario, solo resolver
-// estación, validar producto activo, validar tanque (si se envía) y el
-// INSERT. `costo_total` es `GENERATED ALWAYS AS (cantidad * costo_unitario)
-// STORED` (sección 3.3) — no se inserta, se lee de vuelta con `RETURNING`.
+// (BeginTransaction/Commit/RollbackTransaction explícitos de RDS Data API).
+// `costo_total` es `GENERATED ALWAYS AS (cantidad * costo_unitario) STORED`
+// (sección 3.3) -- no se inserta, se lee de vuelta con `RETURNING`.
+//
+// v1.65 (migración 1788200000000_extiende-compras-multiproducto-multitanque.sql):
+//
+//   - `resolverProducto`: `productoId` pasa a opcional. Cuando viene, el
+//     catálogo (`productos_maestro`) es la fuente de verdad para
+//     `categoria` -- se ignora cualquier `categoria` que mande el cliente,
+//     mismo criterio que ya usa `PostgresCierreTurnoIngestaRepository` para
+//     `cierres_turno_detalle`. Para `producto_nombre`, en cambio, se usa lo
+//     que mande el cliente si lo manda (le permite dar su propio nombre
+//     descriptivo a la compra), y solo si no lo manda se cae al nombre del
+//     catálogo -- a diferencia de `cierres_turno_detalle`, acá el cliente
+//     puede omitir `productoNombre` cuando hay `productoId` (el dominio
+//     -- `CompraInput.ts` -- solo lo exige obligatorio sin `productoId`).
+//
+//   - `validarDestinos` REEMPLAZA a la vieja `validarTanque`: HASTA v1.64 se
+//     exigía que el tanque de una compra perteneciera a la MISMA estación
+//     que la compra (`WHERE ... AND estacion_id = :estacionId`). Eso ya no
+//     aplica -- Jorge describió un caso real de contingencia donde una
+//     compra facturada a una estación reparte parte del combustible a un
+//     tanque de OTRA estación. `validarDestinos` ahora solo confirma que
+//     cada `tanqueId` exista y esté activo, sin importar de qué estación
+//     sea. Es una relajación deliberada de una validación que sí existía
+//     antes -- documentado acá porque no es obvio de solo leer el código.
+//
+//   - El INSERT de `compras` ya NO escribe `tanque_id` (columna que queda
+//     en el DDL, deprecada -- ver nota de cabecera de la migración): el
+//     reparto a tanques vive exclusivamente en `compras_abastecimientos`,
+//     insertada en la misma transacción.
 
 import {
   BeginTransactionCommand,
@@ -15,13 +41,24 @@ import {
   RollbackTransactionCommand,
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
-import { ParametrosInvalidosError, conReintentoSiDbEstaResumiendo } from '@fuelhub/shared-kernel';
-import type { CompraIngestaRepository, CompraOutputDTO, DatosCompraAInsertar } from '../../application/ports/CompraIngestaRepository';
+import { ParametrosInvalidosError, conReintentoSiDbEstaResumiendo, type CategoriaProducto } from '@fuelhub/shared-kernel';
+import type {
+  CompraDestinoDTO,
+  CompraIngestaRepository,
+  CompraOutputDTO,
+  DatosCompraAInsertar,
+} from '../../application/ports/CompraIngestaRepository';
 
 export interface AuroraDataApiConfig {
   readonly resourceArn: string;
   readonly secretArn: string;
   readonly database: string;
+}
+
+interface ProductoResuelto {
+  readonly productoId: string | null;
+  readonly productoNombre: string;
+  readonly categoria: CategoriaProducto | null;
 }
 
 export class PostgresCompraIngestaRepository implements CompraIngestaRepository {
@@ -48,23 +85,11 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         ]);
       }
 
-      const productoValido = await this.validarProducto(datos.productoId, transactionId);
-      if (!productoValido) {
-        throw new ParametrosInvalidosError('productoId no reconocido.', [
-          { field: 'productoId', issue: 'no existe en productos_maestro o no está activo' },
-        ]);
-      }
+      const producto = await this.resolverProducto(datos, transactionId);
+      await this.validarDestinos(datos.destinos, transactionId);
 
-      if (datos.tanqueId) {
-        const tanqueValido = await this.validarTanque(datos.tanqueId, estacionId, transactionId);
-        if (!tanqueValido) {
-          throw new ParametrosInvalidosError('tanqueId no reconocido para esta estación.', [
-            { field: 'tanqueId', issue: 'no existe o pertenece a otra estación' },
-          ]);
-        }
-      }
-
-      const cabecera = await this.insertarCompra(datos, estacionId, transactionId);
+      const cabecera = await this.insertarCompra(datos, estacionId, producto, transactionId);
+      await this.insertarAbastecimientos(cabecera.id, datos.destinos, transactionId);
 
       await conReintentoSiDbEstaResumiendo(() => this.client.send(
         new CommitTransactionCommand({
@@ -74,7 +99,25 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         })
       ));
 
-      return cabecera;
+      const destinos = datos.destinos ?? [];
+      const merma = datos.destinos === undefined ? null : datos.cantidad - sumaDestinos(destinos);
+
+      return {
+        id: cabecera.id,
+        codigoEstacion: datos.codigoEstacion,
+        productoId: producto.productoId,
+        productoNombre: producto.productoNombre,
+        categoria: producto.categoria,
+        proveedor: datos.proveedor ?? null,
+        fecha: datos.fecha,
+        cantidad: datos.cantidad,
+        costoUnitario: datos.costoUnitario,
+        costoTotal: cabecera.costoTotal,
+        numeroGuia: datos.numeroGuia ?? null,
+        destinos,
+        merma,
+        creadoEn: cabecera.creadoEn,
+      };
     } catch (err) {
       await this.client
         .send(
@@ -98,34 +141,68 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     return filas[0] ? String(filas[0].id) : undefined;
   }
 
-  private async validarProducto(productoId: string, transactionId: string): Promise<boolean> {
+  private async resolverProducto(datos: DatosCompraAInsertar, transactionId: string): Promise<ProductoResuelto> {
+    if (!datos.productoId) {
+      // Validado en el dominio (CompraInput.validarCompra): sin productoId,
+      // productoNombre/categoria ya vinieron confirmados como presentes.
+      return {
+        productoId: null,
+        productoNombre: datos.productoNombre as string,
+        categoria: datos.categoria ?? null,
+      };
+    }
+
     const filas = await this.ejecutar(
-      'SELECT id FROM productos_maestro WHERE id = CAST(:id AS uuid) AND activo = true',
-      [paramText('id', productoId)],
+      'SELECT nombre, categoria FROM productos_maestro WHERE id = CAST(:id AS uuid) AND activo = true',
+      [paramText('id', datos.productoId)],
       transactionId
     );
-    return filas.length > 0;
+    const fila = filas[0];
+    if (!fila) {
+      throw new ParametrosInvalidosError('productoId no reconocido.', [
+        { field: 'productoId', issue: 'no existe en productos_maestro o no está activo' },
+      ]);
+    }
+    return {
+      productoId: datos.productoId,
+      productoNombre: datos.productoNombre?.trim() ? datos.productoNombre : String(fila.nombre),
+      categoria: fila.categoria as CategoriaProducto,
+    };
   }
 
-  private async validarTanque(tanqueId: string, estacionId: string, transactionId: string): Promise<boolean> {
-    const filas = await this.ejecutar(
-      'SELECT id FROM tanques WHERE id = CAST(:id AS uuid) AND estacion_id = CAST(:estacionId AS uuid) AND activo = true',
-      [paramText('id', tanqueId), paramText('estacionId', estacionId)],
-      transactionId
-    );
-    return filas.length > 0;
+  private async validarDestinos(destinos: readonly CompraDestinoDTO[] | undefined, transactionId: string): Promise<void> {
+    if (!destinos || destinos.length === 0) return;
+
+    for (const destino of destinos) {
+      const filas = await this.ejecutar(
+        'SELECT id FROM tanques WHERE id = CAST(:id AS uuid) AND activo = true',
+        [paramText('id', destino.tanqueId)],
+        transactionId
+      );
+      if (filas.length === 0) {
+        throw new ParametrosInvalidosError('destinos[].tanqueId no reconocido.', [
+          { field: 'tanqueId', issue: `no existe o no está activo: ${destino.tanqueId}` },
+        ]);
+      }
+    }
   }
 
-  private async insertarCompra(datos: DatosCompraAInsertar, estacionId: string, transactionId: string): Promise<CompraOutputDTO> {
+  private async insertarCompra(
+    datos: DatosCompraAInsertar,
+    estacionId: string,
+    producto: ProductoResuelto,
+    transactionId: string
+  ): Promise<{ id: string; costoTotal: number; creadoEn: string }> {
     const filas = await this.ejecutar(
-      `INSERT INTO compras (estacion_id, tanque_id, producto_id, proveedor, fecha, cantidad, costo_unitario, numero_guia)
-       VALUES (CAST(:estacionId AS uuid), CAST(:tanqueId AS uuid), CAST(:productoId AS uuid), :proveedor,
+      `INSERT INTO compras (estacion_id, producto_id, producto_nombre, categoria, proveedor, fecha, cantidad, costo_unitario, numero_guia)
+       VALUES (CAST(:estacionId AS uuid), CAST(:productoId AS uuid), :productoNombre, CAST(:categoria AS categoria_producto), :proveedor,
                CAST(:fecha AS timestamptz), :cantidad, :costoUnitario, :numeroGuia)
        RETURNING id, costo_total, creado_en`,
       [
         paramText('estacionId', estacionId),
-        paramText('tanqueId', datos.tanqueId ?? null),
-        paramText('productoId', datos.productoId),
+        paramText('productoId', producto.productoId),
+        paramText('productoNombre', producto.productoNombre),
+        paramText('categoria', producto.categoria),
         paramText('proveedor', datos.proveedor ?? null),
         paramText('fecha', datos.fecha),
         paramDecimal('cantidad', datos.cantidad),
@@ -137,19 +214,24 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     const fila = filas[0];
     if (!fila) throw new Error('El INSERT de compras no devolvió fila (inesperado).');
 
-    return {
-      id: String(fila.id),
-      codigoEstacion: datos.codigoEstacion,
-      tanqueId: datos.tanqueId ?? null,
-      productoId: datos.productoId,
-      proveedor: datos.proveedor ?? null,
-      fecha: datos.fecha,
-      cantidad: datos.cantidad,
-      costoUnitario: datos.costoUnitario,
-      costoTotal: Number(fila.costo_total),
-      numeroGuia: datos.numeroGuia ?? null,
-      creadoEn: String(fila.creado_en),
-    };
+    return { id: String(fila.id), costoTotal: Number(fila.costo_total), creadoEn: String(fila.creado_en) };
+  }
+
+  private async insertarAbastecimientos(
+    compraId: string,
+    destinos: readonly CompraDestinoDTO[] | undefined,
+    transactionId: string
+  ): Promise<void> {
+    if (!destinos || destinos.length === 0) return;
+
+    for (const destino of destinos) {
+      await this.ejecutar(
+        `INSERT INTO compras_abastecimientos (compra_id, tanque_id, cantidad)
+         VALUES (CAST(:compraId AS uuid), CAST(:tanqueId AS uuid), :cantidad)`,
+        [paramText('compraId', compraId), paramText('tanqueId', destino.tanqueId), paramDecimal('cantidad', destino.cantidad)],
+        transactionId
+      );
+    }
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[], transactionId: string): Promise<Record<string, unknown>[]> {
@@ -166,6 +248,10 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     ));
     return resultado.formattedRecords ? (JSON.parse(resultado.formattedRecords) as Record<string, unknown>[]) : [];
   }
+}
+
+function sumaDestinos(destinos: readonly CompraDestinoDTO[]): number {
+  return destinos.reduce((acc, d) => acc + d.cantidad, 0);
 }
 
 function paramText(name: string, value: string | null | undefined): SqlParameter {
