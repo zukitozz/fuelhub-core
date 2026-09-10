@@ -211,11 +211,8 @@ export class ApiStack extends Stack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
 
-    const comprobantePdf = api.root
-      .getResource('v1')!
-      .addResource('comprobantes')
-      .addResource('{numeracion}')
-      .addResource('pdf');
+    const comprobanteNumeracion = api.root.getResource('v1')!.addResource('comprobantes').addResource('{numeracion}');
+    const comprobantePdf = comprobanteNumeracion.addResource('pdf');
 
     // requiredScope: reusa cierres.write a propósito (mismo criterio que
     // ConsultaReportesDia con cierres.read) -- el FUELHUB_CORE_CLIENT_ID que
@@ -237,6 +234,29 @@ export class ApiStack extends Stack {
     });
 
     comprobantesPdfBucket.grantWrite(ingestComprobantePdf.fn);
+
+    // --- consulta-comprobante: GET /comprobantes/{numeracion}?ruc=... --------
+    // Lectura publica de cara al cliente final (seccion 7 del spec original
+    // de ingest-comprobante-pdf, v1.72): busca {ruc}/{numeracion}.pdf (y
+    // opcionalmente .xml/-cdr.xml) en el mismo bucket, sin tocar Aurora.
+    // Scope NUEVO y acotado (fuelhub-api/comprobantes.read) -- a proposito
+    // NO reusa cierres.read/write: el cliente M2M de fuelhub-comprobantes no
+    // necesita (ni deberia poder) leer cierres/compras, principio de minimo
+    // privilegio (seccion 6.2). Falta que Jorge registre este scope nuevo en
+    // el Resource Server de Cognito y cree el App Client -- ver specs doc.
+    const consultaComprobante = new AuthenticatedEndpoint(this, 'ConsultaComprobante', {
+      api,
+      authorizer,
+      resource: comprobanteNumeracion,
+      method: 'GET',
+      entry: entryDe('consulta-comprobante'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/comprobantes.read',
+      environment: { COMPROBANTES_PDF_BUCKET_NAME: comprobantesPdfBucket.bucketName },
+    });
+
+    comprobantesPdfBucket.grantRead(consultaComprobante.fn);
 
     // --- consulta-cierres: GET /cierres-turno + GET /cierres-dia ---------------
     // Un solo Lambda para las 2 rutas de listado (sección 4.1) — la segunda
@@ -469,7 +489,10 @@ export class ApiStack extends Stack {
     // loop: no toca Aurora, así que no necesita `grantDataApiAccess`. Su
     // único grant es `comprobantesPdfBucket.grantWrite(...)`, ya hecho junto
     // a su definición más arriba (mismo criterio que
-    // `reportesDocumentosBucket.grantReadWrite(...)`).
+    // `reportesDocumentosBucket.grantReadWrite(...)`). v1.72 agrega `consultaComprobante`
+    // (GET /comprobantes/{numeracion}) con el mismo criterio -- tampoco toca
+    // Aurora, su unico grant es `comprobantesPdfBucket.grantRead(...)`, ya
+    // hecho junto a su definicion mas arriba.
 
     for (const endpoint of [
       ingestCierreTurno,

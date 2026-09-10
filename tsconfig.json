@@ -27,6 +27,7 @@
     "services/admin-tanques/src/**/*.ts",
     "services/consulta-reportes/src/**/*.ts",
     "services/ingest-comprobante-pdf/src/**/*.ts",
+    "services/consulta-comprobante/src/**/*.ts",
     "services/auth-pre-token-generation/src/**/*.ts",
     "infra/lib/constructs/**/*.ts",
     "infra/lib/stacks/**/*.ts",

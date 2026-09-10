@@ -29,7 +29,7 @@ tags:
   - name: compras
     description: Registro de abastecimiento/compras (ingest-compra)
   - name: comprobantes
-    description: Subida del PDF de un comprobante ya generado (ingest-comprobante-pdf) -- v1.69
+    description: Subida (ingest-comprobante-pdf, v1.69) y consulta (consulta-comprobante, v1.72) de comprobantes electronicos
   - name: tanques
     description: Consulta y reasignación de tanques por estación (admin-tanques) — el alta es precarga, no un endpoint (sección 3.8.4)
   - name: reportes
@@ -56,6 +56,10 @@ components:
           scopes:
             fuelhub-api/cierres.write: Registrar cierres, compras y tanques
             fuelhub-api/cierres.read: Consultar cierres, tanques y reportes
+            fuelhub-api/comprobantes.read: >-
+              Consultar comprobantes por ruc+numeracion (v1.72) -- scope
+              acotado, propio del cliente M2M de fuelhub-comprobantes, sin
+              acceso a cierres/compras (principio de minimo privilegio).
 
   parameters:
     IdempotencyKey:
@@ -638,6 +642,62 @@ components:
           type: string
           enum: [ACTIVO, ANULADO]
           description: Anular (o reactivar) la compra -- sección 3.8.6.
+
+    ComprobanteConsulta:
+      type: object
+      description: Respuesta de GET /comprobantes/{numeracion} (v1.72) -- ver descripcion del path para el detalle de que campos son siempre presentes vs. opcionales.
+      properties:
+        ruc:
+          type: string
+          example: '20123456789'
+        numeracion:
+          type: string
+          example: F001-000123
+        serie:
+          type: string
+          description: Derivado de numeracion.
+          example: F001
+        correlativo:
+          type: string
+          description: Derivado de numeracion.
+          example: '000123'
+        tipoComprobante:
+          type: string
+          enum: [FACTURA, BOLETA, DESCONOCIDO]
+          description: Heuristica por primera letra de la serie (F/B) -- ver nota en ConsultaComprobanteInput.ts.
+        urlPdf:
+          type: string
+          format: uri
+          description: URL presignada de S3, valida por expiraEnSegundos.
+        urlXml:
+          type: string
+          format: uri
+          nullable: true
+          description: Solo presente si fuelhub-facturador ya subio el XML bajo el mismo prefijo (pendiente, no implementado todavia).
+        urlCdr:
+          type: string
+          format: uri
+          nullable: true
+          description: Solo presente si fuelhub-facturador ya subio el CDR de SUNAT bajo el mismo prefijo (pendiente, no implementado todavia).
+        expiraEnSegundos:
+          type: integer
+          example: 300
+        fechaEmision:
+          type: string
+          format: date
+          nullable: true
+          description: Solo presente si PUT .../pdf la recibio (metadata opcional, v1.72).
+        importeTotal:
+          type: number
+          format: double
+          nullable: true
+        moneda:
+          type: string
+          enum: [PEN, USD]
+          nullable: true
+        estadoSunat:
+          type: string
+          nullable: true
 
     TanqueUpdateInput:
       type: object
@@ -1254,6 +1314,28 @@ paths:
                 contentBase64:
                   type: string
                   description: PDF completo codificado en base64. Máximo 7 MB decodificados (~9.3 MB en base64, dentro del límite duro de 10 MB de payload de API Gateway REST).
+                fechaEmision:
+                  type: string
+                  format: date
+                  description: >-
+                    Opcional (v1.72) -- fuelhub-facturador todavía no lo manda.
+                    Si viene, queda disponible para GET /comprobantes/{numeracion}.
+                  example: '2026-09-10'
+                importeTotal:
+                  type: number
+                  format: double
+                  minimum: 0
+                  description: Opcional (v1.72), igual que fechaEmision.
+                  example: 125.50
+                moneda:
+                  type: string
+                  enum: [PEN, USD]
+                  description: Opcional (v1.72), igual que fechaEmision.
+                  example: PEN
+                estadoSunat:
+                  type: string
+                  description: Opcional (v1.72), igual que fechaEmision. Texto libre (p. ej. "ACEPTADO").
+                  example: ACEPTADO
       responses:
         '201':
           description: PDF subido.
@@ -1274,6 +1356,53 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /comprobantes/{numeracion}:
+    get:
+      tags: [comprobantes]
+      summary: Buscar un comprobante por ruc + numeracion
+      description: >
+        v1.72 -- Lambda de lectura (consulta-comprobante), de cara al cliente
+        final (proyecto fuelhub-comprobantes, sin login). Busca
+        `{ruc}/{numeracion}.pdf` en el bucket de comprobantes; si existe,
+        devuelve una URL presignada de 5 minutos (y, oportunistamente,
+        `urlXml`/`urlCdr` si esos archivos ya existen bajo el mismo prefijo
+        -- pendiente que fuelhub-facturador los suba, ver
+        specs-cierres-grifo-backend.md sección 3.8.9/3.8.11). `serie`,
+        `correlativo` y `tipoComprobante` se derivan de `numeracion`
+        (heurística por primera letra: F=FACTURA, B=BOLETA). `fechaEmision`/
+        `importeTotal`/`moneda`/`estadoSunat` solo vienen si
+        `PUT .../pdf` los recibió (metadata opcional, v1.72). Scope propio y
+        acotado, sin acceso a cierres/compras.
+      operationId: consultarComprobante
+      x-required-scope: fuelhub-api/comprobantes.read
+      parameters:
+        - name: numeracion
+          in: path
+          required: true
+          schema:
+            type: string
+          example: F001-000123
+        - name: ruc
+          in: query
+          required: true
+          description: RUC (11 dígitos) del emisor -- junto con numeracion arma la key de S3.
+          schema:
+            type: string
+          example: '20123456789'
+      responses:
+        '200':
+          description: Comprobante encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComprobanteConsulta'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /tanques:
     get:

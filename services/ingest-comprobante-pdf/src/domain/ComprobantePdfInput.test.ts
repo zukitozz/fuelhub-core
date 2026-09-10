@@ -18,9 +18,19 @@ function inputValido(overrides: Partial<ComprobantePdfInput> = {}): ComprobanteP
 }
 
 describe('validarYDecodificarComprobantePdf', () => {
-  it('no lanza con un payload válido y devuelve el buffer decodificado', () => {
-    const buffer = validarYDecodificarComprobantePdf(inputValido(), 'F001-000123');
+  it('no lanza con un payload valido y devuelve el buffer decodificado', () => {
+    const { buffer } = validarYDecodificarComprobantePdf(inputValido(), 'F001-000123');
     expect(buffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  });
+
+  it('devuelve metadata vacia cuando no se manda ninguno de los campos opcionales', () => {
+    const { metadata } = validarYDecodificarComprobantePdf(inputValido(), 'F001-000123');
+    expect(metadata).toEqual({
+      fechaEmision: undefined,
+      importeTotal: undefined,
+      moneda: undefined,
+      estadoSunat: undefined,
+    });
   });
 
   it('rechaza cuando falta numeracion (path)', () => {
@@ -40,7 +50,7 @@ describe('validarYDecodificarComprobantePdf', () => {
     );
   });
 
-  it('rechaza un ruc que no tiene 11 dígitos', () => {
+  it('rechaza un ruc que no tiene 11 digitos', () => {
     expect(() => validarYDecodificarComprobantePdf(inputValido({ ruc: '12345' }), 'F001-000123')).toThrow(
       ParametrosInvalidosError
     );
@@ -52,7 +62,7 @@ describe('validarYDecodificarComprobantePdf', () => {
     );
   });
 
-  it('rechaza cuando el base64 decodifica a un buffer vacío', () => {
+  it('rechaza cuando el base64 decodifica a un buffer vacio', () => {
     expect(() => validarYDecodificarComprobantePdf(inputValido({ contentBase64: '====' }), 'F001-000123')).toThrow(
       ParametrosInvalidosError
     );
@@ -72,10 +82,47 @@ describe('validarYDecodificarComprobantePdf', () => {
     );
   });
 
-  it('acepta un buffer justo en el límite de MAX_PDF_BYTES', () => {
+  it('acepta un buffer justo en el limite de MAX_PDF_BYTES', () => {
     const header = Buffer.from('%PDF-');
     const relleno = Buffer.alloc(MAX_PDF_BYTES - header.length, 0x41);
     const exacto = Buffer.concat([header, relleno]).toString('base64');
     expect(() => validarYDecodificarComprobantePdf(inputValido({ contentBase64: exacto }), 'F001-000123')).not.toThrow();
+  });
+
+  it('acepta y normaliza los 4 campos de metadata opcional cuando vienen validos (v1.72)', () => {
+    const { metadata } = validarYDecodificarComprobantePdf(
+      inputValido({ fechaEmision: '2026-09-10', importeTotal: 125.5, moneda: 'pen', estadoSunat: '  ACEPTADO  ' }),
+      'F001-000123'
+    );
+    expect(metadata).toEqual({
+      fechaEmision: '2026-09-10',
+      importeTotal: 125.5,
+      moneda: 'PEN',
+      estadoSunat: 'ACEPTADO',
+    });
+  });
+
+  it('rechaza fechaEmision con formato invalido (v1.72)', () => {
+    expect(() =>
+      validarYDecodificarComprobantePdf(inputValido({ fechaEmision: '10/09/2026' }), 'F001-000123')
+    ).toThrow(ParametrosInvalidosError);
+  });
+
+  it('rechaza importeTotal negativo (v1.72)', () => {
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ importeTotal: -1 }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('rechaza moneda que no sea PEN/USD (v1.72)', () => {
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ moneda: 'EUR' }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('rechaza estadoSunat vacio si se manda explicitamente (v1.72)', () => {
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ estadoSunat: '   ' }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
   });
 });

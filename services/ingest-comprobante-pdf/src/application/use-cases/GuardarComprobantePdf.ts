@@ -1,9 +1,9 @@
 // application/use-cases/GuardarComprobantePdf.ts
 //
-// Espejo de RegistrarCierreTurno.ts: valida, autoriza por estación, delega.
-// El orden importa (sección 5.4): primero la validación estructural pura
-// (dominio), después la autorización por estación -- la única decisión de
-// negocio que este caso de uso no delega al repositorio -- y recién al
+// Espejo de RegistrarCierreTurno.ts: valida, autoriza por estacion, delega.
+// El orden importa (seccion 5.4): primero la validacion estructural pura
+// (dominio), despues la autorizacion por estacion -- la unica decision de
+// negocio que este caso de uso no delega al repositorio -- y recien al
 // final se llama al puerto.
 
 import { AccesoDenegadoEstacionError, hasAccessToStation, type AuthContext } from '@fuelhub/shared-kernel';
@@ -24,13 +24,13 @@ export class GuardarComprobantePdf {
     numeracion: string | undefined,
     input: ComprobantePdfInput
   ): Promise<ComprobantePdfGuardadoResultado> {
-    const buffer = validarYDecodificarComprobantePdf(input, numeracion);
+    const { buffer, metadata } = validarYDecodificarComprobantePdf(input, numeracion);
 
-    // Autorización por estación (5.4): nunca se confía en que el payload
-    // diga la verdad por sí solo -- se compara contra custom:station_scope
+    // Autorizacion por estacion (5.4): nunca se confia en que el payload
+    // diga la verdad por si solo -- se compara contra custom:station_scope
     // del token ya verificado, ANTES de tocar S3. El RUC no participa de
-    // esta autorización (el token de Cognito está scoped por estación, no
-    // por RUC, sección 9.2.1) -- solo se usa como parte de la key de storage.
+    // esta autorizacion (el token de Cognito esta scoped por estacion, no
+    // por RUC, seccion 9.2.1) -- solo se usa como parte de la key de storage.
     if (!hasAccessToStation(auth, input.codigoEstacion)) {
       throw new AccesoDenegadoEstacionError(input.codigoEstacion);
     }
@@ -39,6 +39,7 @@ export class GuardarComprobantePdf {
       ruc: input.ruc,
       numeracion: numeracion!,
       buffer,
+      metadata,
     });
 
     return { codigoEstacion: input.codigoEstacion, numeracion: numeracion!, key };
