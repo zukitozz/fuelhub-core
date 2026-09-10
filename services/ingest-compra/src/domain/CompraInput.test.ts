@@ -110,9 +110,46 @@ describe('validarCompra', () => {
     });
   });
 
-  it('rechaza un destino sin tanqueId', () => {
+  it('rechaza un destino sin tanqueId NI descripcionEntrega (v1.70)', () => {
     const campos = detalles(() => validarCompra(inputValido({ destinos: [{ tanqueId: '', cantidad: 10 }] })));
-    expect(campos).toContainEqual({ field: 'destinos[0].tanqueId', issue: 'requerido' });
+    expect(campos).toContainEqual({
+      field: 'destinos[0]',
+      issue: 'requiere tanqueId (tanque registrado) o descripcionEntrega (entrega externa en texto libre) (v1.70)',
+    });
+  });
+
+  it('rechaza un destino con tanqueId Y descripcionEntrega a la vez (v1.70)', () => {
+    const campos = detalles(() =>
+      validarCompra(
+        inputValido({ destinos: [{ tanqueId: 'uuid-tanque-1', descripcionEntrega: 'Venta al menudeo', cantidad: 10 }] })
+      )
+    );
+    expect(campos).toContainEqual({ field: 'destinos[0]', issue: 'debe tener tanqueId O descripcionEntrega, no ambos (v1.70)' });
+  });
+
+  it('no lanza con un destino de entrega externa (descripcionEntrega, sin tanqueId) -- v1.70', () => {
+    expect(() =>
+      validarCompra(
+        inputValido({
+          cantidad: 500,
+          destinos: [{ descripcionEntrega: 'Venta al menudeo -- camion placa ABC-123', cantidad: 200 }],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('no lanza combinando un destino a tanque y una entrega externa en la misma compra (v1.70)', () => {
+    expect(() =>
+      validarCompra(
+        inputValido({
+          cantidad: 500,
+          destinos: [
+            { tanqueId: 'uuid-tanque-1', cantidad: 300 },
+            { descripcionEntrega: 'Reventa a grifo vecino, sin factura', cantidad: 150 },
+          ],
+        })
+      )
+    ).not.toThrow();
   });
 
   it('rechaza un destino con cantidad <= 0', () => {

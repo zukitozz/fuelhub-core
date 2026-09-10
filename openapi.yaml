@@ -405,15 +405,28 @@ components:
     CompraDestino:
       type: object
       description: >
-        Reparto físico de una compra a un tanque puntual (v1.65) -- el tanque
-        puede pertenecer a una estación DISTINTA a `codigoEstacion` de la
-        compra (contingencia real: se factura a una estación pero parte del
-        combustible va físicamente a otra estación).
-      required: [tanqueId, cantidad]
+        Un destino de compra es EXACTAMENTE uno de dos casos (v1.70, nunca
+        ambos, nunca ninguno): reparto físico a un tanque puntual (`tanqueId`,
+        v1.65 -- el tanque puede pertenecer a una estación DISTINTA a
+        `codigoEstacion` de la compra, contingencia real: se factura a una
+        estación pero parte del combustible va físicamente a otra), o una
+        entrega externa en texto libre (`descripcionEntrega`, v1.70 --
+        reventa a terceros o venta al menudeo a granel fuera de los grifos
+        registrados, sin catálogo de clientes). Una misma compra puede tener
+        varios destinos de ambos tipos combinados. Aplica igual a compras de
+        combustible y de mercadería.
+      required: [cantidad]
       properties:
         tanqueId:
           type: string
           format: uuid
+          description: Tanque registrado destino del reparto. Mutuamente excluyente con `descripcionEntrega` (v1.70).
+        descripcionEntrega:
+          type: string
+          description: >
+            Texto libre para una entrega externa (reventa, venta al menudeo a
+            granel) -- v1.70. Mutuamente excluyente con `tanqueId`.
+          example: "Venta al menudeo -- camion placa ABC-123"
         cantidad:
           type: number
           description: En la unidad de `productos_maestro.medida` del producto comprado (GAL o LT) -- sección 3.3.

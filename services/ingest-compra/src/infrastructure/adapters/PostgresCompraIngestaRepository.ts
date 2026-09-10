@@ -72,6 +72,22 @@
 // así que no hace falta la fila a fila, solo el total repartido y si hubo
 // alguna fila (para distinguir "sin destinos" de "repartido completo", igual
 // que `calcularMerma`).
+//
+// v1.70 (migracion 1788400000000_agrega-entregas-externas-compras.sql), a
+// pedido de Jorge -- registrar donde entrego lo que compro mas alla de los
+// grifos del grupo (reventa/venta al menudeo a granel, sin construir un
+// sistema de ventas): `compras_abastecimientos.tanque_id` pasa a NULLABLE y
+// se agrega `descripcion_entrega` (texto libre), con un CHECK que exige
+// EXACTAMENTE UNO de los dos presentes por fila (nunca ambos, nunca
+// ninguno). `validarDestinos` ahora solo valida contra `tanques` los
+// destinos CON `tanqueId` -- una entrega externa no tiene nada que validar
+// contra el catalogo (es texto libre). `insertarAbastecimientos`/
+// `mapearFilaDestino` leen y escriben ambas columnas. El resto del archivo
+// (`calcularMerma`, el LEFT JOIN agregado de `listar`) no cambia: la suma
+// de `destinos[].cantidad` ya contaba cualquier fila de
+// `compras_abastecimientos` sin mirar de que tipo era, asi que una entrega
+// externa cuenta en esa suma exactamente igual que un tanque -- la merma
+// sigue siendo `cantidad - suma(destinos[].cantidad)`, sin cambios.
 
 import {
   BeginTransactionCommand,
@@ -196,7 +212,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     if (!fila) return undefined;
 
     const destinos = await this.ejecutarSinTransaccion(
-      'SELECT tanque_id, cantidad FROM compras_abastecimientos WHERE compra_id = CAST(:id AS uuid) ORDER BY creado_en',
+      'SELECT tanque_id, descripcion_entrega, cantidad FROM compras_abastecimientos WHERE compra_id = CAST(:id AS uuid) ORDER BY creado_en',
       [paramText('id', id)]
     ).then((filas) => filas.map(mapearFilaDestino));
 
@@ -346,7 +362,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
 
       const destinos = (
         await this.ejecutar(
-          'SELECT tanque_id, cantidad FROM compras_abastecimientos WHERE compra_id = CAST(:id AS uuid) ORDER BY creado_en',
+          'SELECT tanque_id, descripcion_entrega, cantidad FROM compras_abastecimientos WHERE compra_id = CAST(:id AS uuid) ORDER BY creado_en',
           [paramText('id', id)],
           transactionId
         )
@@ -456,6 +472,12 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     if (!destinos || destinos.length === 0) return;
 
     for (const destino of destinos) {
+      // v1.70: una entrega externa (descripcionEntrega) no tiene nada que
+      // validar contra la base -- es texto libre, sin catalogo (ver nota de
+      // cabecera). Solo los destinos con tanqueId siguen validandose contra
+      // `tanques`, igual que antes de v1.70.
+      if (!destino.tanqueId) continue;
+
       const filas = await this.ejecutar(
         'SELECT id FROM tanques WHERE id = CAST(:id AS uuid) AND activo = true',
         [paramText('id', destino.tanqueId)],
@@ -507,10 +529,19 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
     if (!destinos || destinos.length === 0) return;
 
     for (const destino of destinos) {
+      // v1.70: tanque_id/descripcion_entrega son mutuamente excluyentes
+      // (constraint XOR en la migracion 1788400000000) -- aca siempre se
+      // manda explicitamente NULL en el que no aplica, nunca se omite la
+      // columna.
       await this.ejecutar(
-        `INSERT INTO compras_abastecimientos (compra_id, tanque_id, cantidad)
-         VALUES (CAST(:compraId AS uuid), CAST(:tanqueId AS uuid), :cantidad)`,
-        [paramText('compraId', compraId), paramText('tanqueId', destino.tanqueId), paramDecimal('cantidad', destino.cantidad)],
+        `INSERT INTO compras_abastecimientos (compra_id, tanque_id, descripcion_entrega, cantidad)
+         VALUES (CAST(:compraId AS uuid), CAST(:tanqueId AS uuid), :descripcionEntrega, :cantidad)`,
+        [
+          paramText('compraId', compraId),
+          paramText('tanqueId', destino.tanqueId ?? null),
+          paramText('descripcionEntrega', destino.descripcionEntrega ?? null),
+          paramDecimal('cantidad', destino.cantidad),
+        ],
         transactionId
       );
     }
@@ -573,7 +604,12 @@ function mapearFilaCompra(fila: Record<string, unknown>): FilaCompra {
 }
 
 function mapearFilaDestino(fila: Record<string, unknown>): CompraDestinoDTO {
-  return { tanqueId: String(fila.tanque_id), cantidad: Number(fila.cantidad) };
+  return {
+    tanqueId: fila.tanque_id === null || fila.tanque_id === undefined ? null : String(fila.tanque_id),
+    descripcionEntrega:
+      fila.descripcion_entrega === null || fila.descripcion_entrega === undefined ? null : String(fila.descripcion_entrega),
+    cantidad: Number(fila.cantidad),
+  };
 }
 
 function mapearCompraCompleta(compra: FilaCompra, destinos: readonly CompraDestinoDTO[]): CompraOutputDTO {

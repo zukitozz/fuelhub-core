@@ -8,13 +8,15 @@
 //
 // Dos particularidades frente a `TanqueUpdateInput`:
 //
-//   1. `destinos`, cuando viene, REEMPLAZA TODO el reparto a tanques de la
+//   1. `destinos`, cuando viene, REEMPLAZA TODO el reparto/entregas de la
 //      compra -- no es un merge fila por fila. Para agregar, quitar o
 //      corregir un destino, el cliente manda la lista COMPLETA resultante
 //      (mismo criterio que ya usa el propio `POST /compras` -- ver
 //      `CompraInput.ts`). Es la forma más simple de cubrir "agregar,
 //     eliminar o editar" con un solo campo, sin necesitar sub-rutas para
-//     cada destino individual.
+//     cada destino individual. Cada elemento sigue la misma regla XOR
+//     (`tanqueId` O `descripcionEntrega`, v1.70) que `CompraInput.ts` --
+//     ver `validarDestino`, compartida entre los dos archivos.
 //
 //   2. `estado` deja anular una compra (`'ANULADO'`) sin borrarla --
 //     confirmado con Jorge: se prefiere mantener el historial completo para
@@ -28,7 +30,7 @@
 //   (`PostgresCompraIngestaRepository.actualizar`).
 
 import { ParametrosInvalidosError, type CategoriaProducto, type DetalleValidacion, type EstadoCierre } from '@fuelhub/shared-kernel';
-import type { CompraDestinoInput } from './CompraInput';
+import { validarDestino, type CompraDestinoInput } from './CompraInput';
 
 export interface CompraUpdateInput {
   readonly productoId?: string | null;
@@ -39,7 +41,7 @@ export interface CompraUpdateInput {
   readonly cantidad?: number;
   readonly costoUnitario?: number;
   readonly numeroGuia?: string | null;
-  /** Reemplaza TODO el reparto a tanques de la compra (v1.66) -- ver nota de cabecera, punto 1. */
+  /** Reemplaza TODO el reparto/entregas de la compra (v1.66, extendido v1.70). Ver nota de cabecera, punto 1. */
   readonly destinos?: readonly CompraDestinoInput[];
   /** Anular/reactivar (v1.66) -- ver nota de cabecera, punto 2. */
   readonly estado?: EstadoCierre;
@@ -88,14 +90,7 @@ export function validarCompraUpdate(input: CompraUpdateInput): void {
   }
 
   if (input.destinos !== undefined) {
-    input.destinos.forEach((destino, i) => {
-      if (!destino.tanqueId?.trim()) {
-        errores.push({ field: `destinos[${i}].tanqueId`, issue: 'requerido' });
-      }
-      if (typeof destino.cantidad !== 'number' || destino.cantidad <= 0) {
-        errores.push({ field: `destinos[${i}].cantidad`, issue: 'debe ser un número > 0' });
-      }
-    });
+    input.destinos.forEach((destino, i) => validarDestino(destino, i, errores));
 
     // Solo se puede validar contra `cantidad` acá si esta misma actualización
     // también la está cambiando -- si no, el adaptador la valida contra la

@@ -68,7 +68,7 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
 
     expect(registrado.codigoEstacion).toBe(estacion.codigo);
     expect(registrado.productoId).toBe(tanque.productoId);
-    expect(registrado.destinos).toEqual([{ tanqueId: tanque.id, cantidad: 480 }]);
+    expect(registrado.destinos).toEqual([{ tanqueId: tanque.id, descripcionEntrega: null, cantidad: 480 }]);
     expect(registrado.merma).toBeCloseTo(20, 3);
     // cantidad(500) * costoUnitario(12.345) — columna GENERATED de Postgres, se relee con RETURNING.
     expect(registrado.costoTotal).toBeCloseTo(6172.5, 2);
@@ -109,6 +109,48 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
     expect(registrado.merma).toBeNull();
   }, 30_000);
 
+  it('registra una compra con una entrega externa (descripcionEntrega, sin tanqueId) -- v1.70', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const tanque = await primerTanqueDeEstacion(estacion.codigo);
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const datos: DatosCompraAInsertar = {
+      codigoEstacion: estacion.codigo,
+      productoId: tanque.productoId,
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 500,
+      costoUnitario: 12,
+      // Combina un tanque registrado con una entrega externa (venta al menudeo a granel) --
+      // ambas cuentan igual en la suma de destinos[], asi que la merma solo cubre lo no explicado.
+      destinos: [
+        { tanqueId: tanque.id, cantidad: 350 },
+        { descripcionEntrega: `${MARCADOR_CI} venta al menudeo -- camion placa ABC-123`, cantidad: 100 },
+      ],
+    };
+
+    const registrado = await ingestaRepo.registrar(datos);
+    idsCreados.push(registrado.id);
+
+    expect(registrado.destinos).toHaveLength(2);
+    expect(registrado.destinos).toContainEqual({ tanqueId: tanque.id, descripcionEntrega: null, cantidad: 350 });
+    expect(registrado.destinos).toContainEqual({
+      tanqueId: null,
+      descripcionEntrega: `${MARCADOR_CI} venta al menudeo -- camion placa ABC-123`,
+      cantidad: 100,
+    });
+    // 500 comprado - (350 tanque + 100 entrega externa) = 50 de merma real (no explicada).
+    expect(registrado.merma).toBeCloseTo(50, 3);
+
+    const releido = await ingestaRepo.obtenerPorId(registrado.id);
+    expect(releido?.destinos).toHaveLength(2);
+    expect(releido?.destinos).toContainEqual({
+      tanqueId: null,
+      descripcionEntrega: `${MARCADOR_CI} venta al menudeo -- camion placa ABC-123`,
+      cantidad: 100,
+    });
+  }, 30_000);
+
   it('obtenerPorId relee una compra ya registrada con sus destinos (v1.66)', async () => {
     const estacion = await primeraEstacionSembrada();
     const tanque = await primerTanqueDeEstacion(estacion.codigo);
@@ -129,7 +171,7 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
     expect(releido).toBeDefined();
     expect(releido?.id).toBe(registrado.id);
     expect(releido?.estado).toBe('ACTIVO');
-    expect(releido?.destinos).toEqual([{ tanqueId: tanque.id, cantidad: 200 }]);
+    expect(releido?.destinos).toEqual([{ tanqueId: tanque.id, descripcionEntrega: null, cantidad: 200 }]);
     expect(releido?.merma).toBeCloseTo(0, 3);
   }, 30_000);
 
@@ -160,7 +202,7 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
 
     expect(actualizado.proveedor).toBe(`${MARCADOR_CI} (editado)`);
     expect(actualizado.cantidad).toBe(280);
-    expect(actualizado.destinos).toEqual([{ tanqueId: tanque.id, cantidad: 260 }]);
+    expect(actualizado.destinos).toEqual([{ tanqueId: tanque.id, descripcionEntrega: null, cantidad: 260 }]);
     expect(actualizado.merma).toBeCloseTo(20, 3);
 
     const abastecimientos = await ejecutar('SELECT cantidad FROM compras_abastecimientos WHERE compra_id = CAST(:id AS uuid)', [
