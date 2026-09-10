@@ -183,7 +183,15 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         })
       ));
 
-      const destinos = datos.destinos ?? [];
+      // v1.70: a diferencia de obtenerPorId/actualizar (que releen de la
+      // base via mapearFilaDestino), registrar() no hace un segundo
+      // roundtrip -- devuelve el propio `datos.destinos` de vuelta. Sin
+      // normalizar, un destino que llego con solo `tanqueId` (sin
+      // `descripcionEntrega` en el JSON) se devolvia con esa clave ausente
+      // en vez de en `null` explicito -- inconsistente con la forma que sí
+      // exponen obtenerPorId/actualizar/listar para el mismo dato. Bug real
+      // encontrado por Jorge corriendo test:integration contra dev.
+      const destinos = (datos.destinos ?? []).map(normalizarDestino);
       return {
         id: cabecera.id,
         codigoEstacion: datos.codigoEstacion,
@@ -600,6 +608,16 @@ function mapearFilaCompra(fila: Record<string, unknown>): FilaCompra {
     numeroGuia: fila.numero_guia === null || fila.numero_guia === undefined ? null : String(fila.numero_guia),
     estado: fila.estado as EstadoCierre,
     creadoEn: String(fila.creado_en),
+  };
+}
+
+function normalizarDestino(destino: CompraDestinoDTO): CompraDestinoDTO {
+  // Mismo criterio que mapearFilaDestino: ambos campos siempre presentes,
+  // uno de los dos en null -- nunca una clave ausente (v1.70).
+  return {
+    tanqueId: destino.tanqueId ?? null,
+    descripcionEntrega: destino.descripcionEntrega ?? null,
+    cantidad: destino.cantidad,
   };
 }
 
