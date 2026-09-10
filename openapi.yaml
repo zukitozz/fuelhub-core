@@ -28,6 +28,8 @@ tags:
     description: Registro y consulta de cierres de día (ingest-cierre-dia, consulta-cierres)
   - name: compras
     description: Registro de abastecimiento/compras (ingest-compra)
+  - name: comprobantes
+    description: Subida del PDF de un comprobante ya generado (ingest-comprobante-pdf) -- v1.69
   - name: tanques
     description: Consulta y reasignación de tanques por estación (admin-tanques) — el alta es precarga, no un endpoint (sección 3.8.4)
   - name: reportes
@@ -1196,6 +1198,69 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /comprobantes/{numeracion}/pdf:
+    put:
+      tags: [comprobantes]
+      summary: Subir el PDF de un comprobante
+      description: >
+        v1.69 -- sube (o reemplaza) el PDF ya generado del comprobante a S3.
+        Idempotente de forma natural -- subir el mismo PDF dos veces pisa el
+        mismo objeto, sin necesidad de Idempotency-Key. Reusa a propósito el
+        scope `cierres.write` (no uno propio de comprobantes) para funcionar
+        de inmediato con las credenciales M2M que `fuelhub-facturador` ya
+        tiene en producción. Lambda `ingest-comprobante-pdf`. La key de S3
+        se arma como `{ruc}/{numeracion}.pdf` -- ver
+        specs-cierres-grifo-backend.md sección 3.8.9 para el detalle
+        completo y el plan de XML/CDR (pendiente, no implementado en esta
+        entrada).
+      operationId: subirComprobantePdf
+      x-required-scope: fuelhub-api/cierres.write
+      parameters:
+        - name: numeracion
+          in: path
+          required: true
+          schema:
+            type: string
+          example: F001-000123
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codigoEstacion, ruc, contentBase64]
+              properties:
+                codigoEstacion:
+                  type: string
+                  description: Validado contra custom:station_scope del token (sección 5.4) -- nunca se confía en el payload por sí solo.
+                ruc:
+                  type: string
+                  description: RUC (11 dígitos) del emisor del comprobante -- junto con `numeracion` (serie-correlativo) arma la key de S3, para poder ubicar comprobantes por el criterio combinado ruc-serie-correlativo.
+                  example: '20123456789'
+                contentBase64:
+                  type: string
+                  description: PDF completo codificado en base64. Máximo 7 MB decodificados (~9.3 MB en base64, dentro del límite duro de 10 MB de payload de API Gateway REST).
+      responses:
+        '201':
+          description: PDF subido.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codigoEstacion:
+                    type: string
+                  numeracion:
+                    type: string
+                  key:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
 
   /tanques:
     get:

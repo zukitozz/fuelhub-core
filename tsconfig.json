@@ -26,6 +26,7 @@
     "services/ingest-compra/src/**/*.ts",
     "services/admin-tanques/src/**/*.ts",
     "services/consulta-reportes/src/**/*.ts",
+    "services/ingest-comprobante-pdf/src/**/*.ts",
     "services/auth-pre-token-generation/src/**/*.ts",
     "infra/lib/constructs/**/*.ts",
     "infra/lib/stacks/**/*.ts",

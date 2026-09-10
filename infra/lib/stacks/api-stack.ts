@@ -199,6 +199,45 @@ export class ApiStack extends Stack {
       requiredScope: 'fuelhub-api/cierres.read',
     });
 
+    // --- ingest-comprobante-pdf: PUT /comprobantes/{numeracion}/pdf -----------
+    // Sube el PDF ya generado por fuelhub-facturador a S3 (spec pegado por
+    // Jorge, ver specs-cierres-grifo-backend.md sección 3.8.9). A diferencia
+    // de ReportesDocumentosBucket (que es scratch, 1 día de vida, se
+    // regenera en cada request), este bucket es el almacenamiento REAL y
+    // persistente de los comprobantes de un grifo: SIN autoDeleteObjects,
+    // SIN lifecycleRules de expiración. RemovalPolicy por defecto es RETAIN
+    // -- si el stack se destruye, estos documentos no se van con él.
+    const comprobantesPdfBucket = new s3.Bucket(this, 'ComprobantesPdfBucket', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    });
+
+    const comprobantePdf = api.root
+      .getResource('v1')!
+      .addResource('comprobantes')
+      .addResource('{numeracion}')
+      .addResource('pdf');
+
+    // requiredScope: reusa cierres.write a propósito (mismo criterio que
+    // ConsultaReportesDia con cierres.read) -- el FUELHUB_CORE_CLIENT_ID que
+    // fuelhub-facturador ya tiene en su .env de producción ya trae
+    // fuelhub-api/cierres.write, así que el endpoint funciona apenas se
+    // despliega, sin coordinar un cambio de scopes en consola de Cognito
+    // primero. No toca AURORA_ENV/dataStack/idempotencyTable -- este Lambda
+    // no toca Aurora ni DynamoDB (ver nota de idempotencia en el handler).
+    const ingestComprobantePdf = new AuthenticatedEndpoint(this, 'IngestComprobantePdf', {
+      api,
+      authorizer,
+      resource: comprobantePdf,
+      method: 'PUT',
+      entry: entryDe('ingest-comprobante-pdf'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/cierres.write',
+      environment: { COMPROBANTES_PDF_BUCKET_NAME: comprobantesPdfBucket.bucketName },
+    });
+
+    comprobantesPdfBucket.grantWrite(ingestComprobantePdf.fn);
+
     // --- consulta-cierres: GET /cierres-turno + GET /cierres-dia ---------------
     // Un solo Lambda para las 2 rutas de listado (sección 4.1) — la segunda
     // reusa el `fn` de la primera (ver `authenticated-endpoint.ts`).
@@ -425,7 +464,12 @@ export class ApiStack extends Stack {
     // IngestCompraActualizar (PUT /compras/{id}), y v1.67 agrega
     // IngestCompraListar/IngestCompraObtener (GET /compras, GET
     // /compras/{id}) -- las tres reusan `ingestCompra.fn`, ninguna suma un
-    // Lambda nuevo a la lista de abajo.
+    // Lambda nuevo a la lista de abajo. v1.69 agrega `ingestComprobantePdf`
+    // (PUT /comprobantes/{numeracion}/pdf) -- deliberadamente AFUERA de este
+    // loop: no toca Aurora, así que no necesita `grantDataApiAccess`. Su
+    // único grant es `comprobantesPdfBucket.grantWrite(...)`, ya hecho junto
+    // a su definición más arriba (mismo criterio que
+    // `reportesDocumentosBucket.grantReadWrite(...)`).
 
     for (const endpoint of [
       ingestCierreTurno,
