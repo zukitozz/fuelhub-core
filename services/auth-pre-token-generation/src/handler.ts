@@ -21,6 +21,17 @@
 // PRE_TOKEN_GENERATION_CONFIG, fn, LambdaVersion.V3_0)` — el operation
 // correcto para pasar V3_0 (ver el comentario en ese archivo: usar
 // `PRE_TOKEN_GENERATION` a secas con V3_0 falla en `cdk synth`, verificado).
+//
+// v1.72: se agrega una excepción acotada para App Clients cuyo ÚNICO scope
+// solicitado es `fuelhub-api/comprobantes.read` (ej. `fuelhub-comprobantes`,
+// sección 3.8.11) -- ese endpoint (`GET /comprobantes/{numeracion}`) no
+// autoriza por estación (`ConsultarComprobante.ts` no recibe `AuthContext`),
+// así que exigirle `station.*` a un cliente puramente de lectura de
+// comprobantes no tiene sentido y bloqueaba la emisión del token por
+// completo (`UserLambdaValidationException`, hallazgo real de Jorge). Para
+// cualquier OTRA combinación de scopes (`cierres.write`/`cierres.read`, con
+// o sin `station.*`) el comportamiento es EXACTAMENTE el mismo de siempre:
+// exige un scope `fuelhub-api/station.<CODIGO>` o rechaza explícitamente.
 
 import type { PreTokenGenerationV3TriggerEvent, PreTokenGenerationV3TriggerHandler } from 'aws-lambda';
 
@@ -31,6 +42,12 @@ const ROL_SISTEMA_M2M = 'SISTEMA_GRIFO';
 
 // Prefijo del scope exclusivo por estación (9.2.1): `fuelhub-api/station.<CODIGO>`.
 const PREFIJO_SCOPE_ESTACION = 'fuelhub-api/station.';
+
+// v1.72 -- scopes cuyo token NO necesita custom:station_scope porque ningún
+// caso de uso que los consume autoriza por estación. Lista deliberadamente
+// corta y explícita (allowlist, no una regla general) para no aflojar sin
+// querer el requisito de station.* de scopes que sí lo necesitan.
+const SCOPES_SIN_STATION_REQUERIDO = new Set(['fuelhub-api/comprobantes.read']);
 
 export const handler: PreTokenGenerationV3TriggerHandler = async (
   event: PreTokenGenerationV3TriggerEvent
@@ -44,7 +61,18 @@ export const handler: PreTokenGenerationV3TriggerHandler = async (
     return event;
   }
 
-  const scopeEstacion = (event.request.scopes ?? []).find((scope) => scope.startsWith(PREFIJO_SCOPE_ESTACION));
+  const scopesSolicitados = event.request.scopes ?? [];
+
+  // v1.72: si TODOS los scopes solicitados están en la lista de "no
+  // requiere station" (hoy, solo comprobantes.read), se emite el token sin
+  // agregar custom:role/custom:station_scope -- ver nota de cabecera.
+  const todosExentos =
+    scopesSolicitados.length > 0 && scopesSolicitados.every((scope) => SCOPES_SIN_STATION_REQUERIDO.has(scope));
+  if (todosExentos) {
+    return event;
+  }
+
+  const scopeEstacion = scopesSolicitados.find((scope) => scope.startsWith(PREFIJO_SCOPE_ESTACION));
 
   if (!scopeEstacion) {
     // Falla explícito en vez de emitir un token con `station_scope` vacío —
