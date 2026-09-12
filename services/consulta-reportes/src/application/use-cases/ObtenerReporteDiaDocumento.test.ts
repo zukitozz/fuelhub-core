@@ -23,11 +23,15 @@ function auth(overrides: Partial<AuthContext> = {}): AuthContext {
   return { clientId: 'test-client', role: 'SISTEMA_GRIFO', stationScope: 'CHANCAYLLO', scopes: [], ...overrides };
 }
 
+function cierreDiaIdDe(estacionCodigo: string): string {
+  return `cierre-dia-${estacionCodigo}`;
+}
+
 function reporteDe(estacionCodigo: string): ReporteDiaDTO {
   return {
     estacionCodigo,
     fechaNegocio: '2026-08-22',
-    cierreDiaId: 'a1b2c3d4-0000-0000-0000-000000000000',
+    cierreDiaId: cierreDiaIdDe(estacionCodigo),
     total: 1000,
     totalCombustible: 900,
     totalNoCombustible: 100,
@@ -56,7 +60,7 @@ function estacionDe(estacionCodigo: string): ReporteDiaEstacionDocumentoDTO {
 
 class RepoFake implements ReporteDiaQueryRepository {
   public llamadasObtener: unknown[] = [];
-  public llamadasListarTurnos: FiltrosReporteDia[] = [];
+  public llamadasListarTurnos: string[] = [];
   public llamoListarActivas = false;
   constructor(
     private readonly reportesPorEstacion: Record<string, ReporteDiaDTO | null>,
@@ -74,9 +78,10 @@ class RepoFake implements ReporteDiaQueryRepository {
     return this.codigosActivos;
   }
 
-  async listarTurnos(filtros: FiltrosReporteDia): Promise<ReporteDiaTurnoDTO[]> {
-    this.llamadasListarTurnos.push(filtros);
-    return this.turnosPorEstacion[filtros.estacionCodigo] ?? turnosDe(filtros.estacionCodigo);
+  async listarTurnos(cierreDiaId: string): Promise<ReporteDiaTurnoDTO[]> {
+    this.llamadasListarTurnos.push(cierreDiaId);
+    const estacionCodigo = cierreDiaId.replace(/^cierre-dia-/, '');
+    return this.turnosPorEstacion[estacionCodigo] ?? turnosDe(estacionCodigo);
   }
 }
 
@@ -110,7 +115,7 @@ describe('ObtenerReporteDiaDocumento', () => {
 
     expect(resultado).toEqual({ url: expect.stringContaining('CHANCAYLLO'), tipo: 'application/pdf', expiraEn: 600 });
     expect(renderer.ultimosDatos).toEqual({ modo: 'individual', estacion: estacionDe('CHANCAYLLO') });
-    expect(repo.llamadasListarTurnos).toEqual([{ estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-08-22' }]);
+    expect(repo.llamadasListarTurnos).toEqual([cierreDiaIdDe('CHANCAYLLO')]);
     expect(repo.llamoListarActivas).toBe(false);
   });
 
@@ -122,7 +127,7 @@ describe('ObtenerReporteDiaDocumento', () => {
 
     expect(resultado.tipo).toBe('application/pdf');
     expect(repo.llamadasObtener).toEqual([{ estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-08-22' }]);
-    expect(repo.llamadasListarTurnos).toEqual([{ estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-08-22' }]);
+    expect(repo.llamadasListarTurnos).toEqual([cierreDiaIdDe('CHANCAYLLO')]);
   });
 
   it('individual: 403 si el token no tiene acceso a la estación pedida', async () => {
@@ -165,7 +170,7 @@ describe('ObtenerReporteDiaDocumento', () => {
       fechaNegocio: '2026-08-22',
       estaciones: [estacionDe('CHANCAYLLO'), estacionDe('MALA')],
     });
-    expect(repo.llamadasListarTurnos.map((f) => f.estacionCodigo).sort()).toEqual(['CHANCAYLLO', 'MALA']);
+    expect(repo.llamadasListarTurnos.sort()).toEqual([cierreDiaIdDe('CHANCAYLLO'), cierreDiaIdDe('MALA')].sort());
     expect(storage.ultimoKey).toContain('consolidado');
   });
 

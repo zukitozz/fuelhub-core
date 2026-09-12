@@ -357,7 +357,7 @@ components:
 
     CierreDiaInput:
       type: object
-      required: [codigoEstacion, fechaNegocio, fecha, total, administrador]
+      required: [codigoEstacion, fechaNegocio, fecha, total, administrador, cierresTurnoIds]
       properties:
         codigoEstacion:
           type: string
@@ -377,6 +377,22 @@ components:
           allOf:
             - $ref: '#/components/schemas/Empleado'
           description: Se auto-provisiona en `usuarios` con `rol = ADMINISTRADOR` (sección 3.7.1) — distinto del operador de cada turno.
+        cierresTurnoIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+          description: >
+            IDs de los `cierres_turno` (los que devolvió cada `POST
+            /cierres-turno` del día) que este cierre de día está cerrando
+            (v1.76). Vincula explícitamente cada turno con este cierre de
+            día en vez de inferirlo por `fechaNegocio` — esa inferencia es
+            ambigua cuando hay más de un cierre de día para la misma
+            estación+fecha. Todos los ids deben existir, pertenecer a
+            `codigoEstacion`, estar `ACTIVO` y no tener ya un cierre de día
+            asignado; si alguno no matchea, se rechaza el cierre de día
+            completo (400) y no se graba nada.
 
     CierreDiaResumen:
       type: object

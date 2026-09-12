@@ -4,15 +4,29 @@
 // son continuación mecánica de un ejemplo de la sección 3.8.2 (a diferencia
 // de margen/abastecimiento, este reporte no tenía un SQL de ejemplo previo):
 //
-//   1. Se agrupan los `cierres_turno` del día por `estacion_id`+`fecha_negocio`,
-//      NO por `cierre_dia_id`. La columna `cierres_turno.cierre_dia_id`
-//      existe en el esquema (3.3) pero HOY NINGÚN caso de uso la escribe —
-//      `RegistrarCierreDia` nunca hace el UPDATE que asociaría los turnos
-//      del día a su fila de `cierres_dia` — así que confiar en ella dejaría
-//      este reporte siempre vacío. Es el mismo criterio de fecha que ya usan
-//      las 3 consultas de ejemplo de 3.8.2 (a/b/c). Se deja anotado como
-//      hallazgo a confirmar con Jorge (changelog de esta versión) — arreglar
-//      el UPDATE en sí queda fuera de alcance de este endpoint.
+//   1. [RESUELTO en v1.76, ver abajo] Hasta v1.75 se agrupaban los
+//      `cierres_turno` del día por `estacion_id`+`fecha_negocio`, NO por
+//      `cierre_dia_id` -- esa columna existía en el esquema (3.3) pero ningún
+//      caso de uso la escribía (`RegistrarCierreDia` nunca hacía el UPDATE
+//      que asociaría los turnos del día a su fila de `cierres_dia`), así que
+//      confiar en ella dejaba este reporte siempre vacío. Quedó anotado como
+//      hallazgo a confirmar con Jorge -- confirmado real: el match por
+//      `fecha_negocio` es ambiguo cuando hay más de un `cierres_dia` "ACTIVO"
+//      para la misma estación+fecha (`obtenerCierreDia` ya se defendía de
+//      ese caso con `ORDER BY recibido_en DESC LIMIT 1`, pero `obtenerProductos`/
+//      `listarTurnos` de todas formas agregaban turnos de TODOS los
+//      `cierres_dia` de esa fecha, no solo del elegido).
+//
+//      v1.76: `POST /cierres-dia` ahora exige `cierresTurnoIds` (los ids que
+//      devolvió cada `POST /cierres-turno` del día) y
+//      `PostgresCierreDiaIngestaRepository.vincularCierresTurno` hace el
+//      UPDATE que faltaba, dentro de la misma transacción del INSERT. Con
+//      `cierre_dia_id` ya poblado, `obtenerProductos`/`listarTurnos` cuelgan
+//      directo de ese id (ver esos métodos) en vez de re-filtrar por
+//      `fecha_negocio` -- la ambigüedad desaparece de raíz. Cierres de día
+//      registrados ANTES de v1.76 quedan con `cierre_dia_id` NULL en sus
+//      turnos (sin backfill retroactivo); esos días seguirán devolviendo
+//      `productos`/`turnos` vacíos aunque el `cierres_dia.total` sí exista.
 //
 //   2. `ingresos`/`cantidadVendida` por producto usan
 //      `COALESCE(despacho_*, total_*, 0)`, no `despacho_*` a secas (que sí
@@ -80,7 +94,7 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
     const cierreDia = await this.obtenerCierreDia(parametros);
     if (cierreDia === null) return null;
 
-    const productos = await this.obtenerProductos(parametros);
+    const productos = await this.obtenerProductos(cierreDia.id);
     const totales = productos.reduce(
       (acc, p) => {
         if (p.categoria === 'COMBUSTIBLE') acc.totalCombustible += p.ingresos;
@@ -114,11 +128,13 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
   // de 1 por turno -- evita N+1 contra RDS Data API cuando un día tiene
   // varios turnos. Mismo criterio de CAST/COALESCE ya establecido en el
   // resto de este archivo (v1.59/v1.58).
-  async listarTurnos(filtros: FiltrosReporteDia): Promise<ReporteDiaTurnoDTO[]> {
-    const parametros: SqlParameter[] = [
-      { name: 'estacionCodigo', value: { stringValue: filtros.estacionCodigo } },
-      { name: 'fechaNegocio', value: { stringValue: filtros.fechaNegocio } },
-    ];
+  //
+  // v1.76: filtra por `ct.cierre_dia_id` en vez de `estacionCodigo`+
+  // `fecha_negocio` -- ya no hace falta el JOIN a `estaciones` ni el CAST de
+  // fecha acá, `cierre_dia_id` ya acota estación y día sin ambigüedad (ver
+  // el hallazgo documentado arriba del archivo).
+  async listarTurnos(cierreDiaId: string): Promise<ReporteDiaTurnoDTO[]> {
+    const parametros: SqlParameter[] = [{ name: 'cierreDiaId', value: { stringValue: cierreDiaId } }];
 
     const [cabeceras, productos] = await Promise.all([
       this.ejecutar(
@@ -126,10 +142,8 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
           SELECT ct.id, ct.turno, COALESCE(u.nombre, '(sin asignar)') AS empleado,
                  ct.fecha_inicio, ct.fecha, ct.total
           FROM cierres_turno ct
-          JOIN estaciones e      ON e.id = ct.estacion_id
           LEFT JOIN usuarios u   ON u.id = ct.usuario_id
-          WHERE e.codigo = :estacionCodigo
-            AND ct.fecha_negocio = CAST(:fechaNegocio AS date)
+          WHERE ct.cierre_dia_id = CAST(:cierreDiaId AS uuid)
             AND ct.estado = 'ACTIVO'
           ORDER BY ct.fecha_inicio ASC
         `,
@@ -145,10 +159,8 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
                  SUM(COALESCE(ctd.despacho_soles, ctd.total_soles, 0))       AS ingresos
           FROM cierres_turno_detalle ctd
           JOIN cierres_turno ct          ON ct.id = ctd.cierre_turno_id
-          JOIN estaciones e               ON e.id = ct.estacion_id
           LEFT JOIN productos_maestro pm ON pm.id = ctd.producto_id
-          WHERE e.codigo = :estacionCodigo
-            AND ct.fecha_negocio = CAST(:fechaNegocio AS date)
+          WHERE ct.cierre_dia_id = CAST(:cierreDiaId AS uuid)
             AND ct.estado = 'ACTIVO'
           GROUP BY ctd.cierre_turno_id, ctd.producto_id, COALESCE(pm.nombre, ctd.producto_nombre), COALESCE(ctd.categoria, pm.categoria)
           ORDER BY ctd.cierre_turno_id, ingresos DESC
@@ -202,7 +214,10 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
     return { id: String(fila.id), total: Number(fila.total) };
   }
 
-  private async obtenerProductos(parametros: SqlParameter[]): Promise<ReporteDiaProductoDTO[]> {
+  // v1.76: filtra por `ct.cierre_dia_id` en vez de `estacionCodigo`+
+  // `fecha_negocio` -- mismo motivo que `listarTurnos` (ver el comentario ahí
+  // y el hallazgo documentado arriba del archivo).
+  private async obtenerProductos(cierreDiaId: string): Promise<ReporteDiaProductoDTO[]> {
     const sql = `
       SELECT ctd.producto_id                              AS producto_id,
              COALESCE(pm.nombre, ctd.producto_nombre)      AS producto,
@@ -211,15 +226,13 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
              SUM(COALESCE(ctd.despacho_soles, ctd.total_soles, 0))       AS ingresos
       FROM cierres_turno_detalle ctd
       JOIN cierres_turno ct           ON ct.id = ctd.cierre_turno_id
-      JOIN estaciones e                ON e.id = ct.estacion_id
       LEFT JOIN productos_maestro pm  ON pm.id = ctd.producto_id
-      WHERE e.codigo = :estacionCodigo
-        AND ct.fecha_negocio = CAST(:fechaNegocio AS date)
+      WHERE ct.cierre_dia_id = CAST(:cierreDiaId AS uuid)
         AND ct.estado = 'ACTIVO'
       GROUP BY ctd.producto_id, COALESCE(pm.nombre, ctd.producto_nombre), COALESCE(ctd.categoria, pm.categoria)
       ORDER BY ingresos DESC
     `;
-    const filas = await this.ejecutar(sql, parametros);
+    const filas = await this.ejecutar(sql, [{ name: 'cierreDiaId', value: { stringValue: cierreDiaId } }]);
     return filas.map(mapearFilaProducto);
   }
 

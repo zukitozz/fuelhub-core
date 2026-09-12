@@ -1,0 +1,667 @@
+{
+  "info": {
+    "name": "FuelHub Cloud API",
+    "description": "Colección generada desde openapi.yaml (v1.59). baseUrl viene apuntando a dev por default -- cambialo a {{baseUrlProd}} (o pega su valor directo en baseUrl) para probar contra prod. Completa clientId/clientSecret en la colección (icono de ojito -> Edit) y corre primero 'Auth > Obtener token M2M' -- guarda accessToken solo para el resto de requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "tokenUrl",
+      "value": "https://us-east-2nq1gjcb0j.auth.us-east-2.amazoncognito.com/oauth2/token"
+    },
+    {
+      "key": "clientId",
+      "value": ""
+    },
+    {
+      "key": "clientSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "scope",
+      "value": "fuelhub-api/cierres.write fuelhub-api/cierres.read fuelhub-api/station.CHANCAYLLO"
+    },
+    {
+      "key": "baseUrlDev",
+      "value": "https://i2o733ofzk.execute-api.us-east-2.amazonaws.com/dev/v1"
+    },
+    {
+      "key": "baseUrlProd",
+      "value": "https://6gy2rrty17.execute-api.us-east-2.amazonaws.com/prod/v1"
+    },
+    {
+      "key": "baseUrl",
+      "value": "{{baseUrlDev}}"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "estacionCodigo",
+      "value": "CHANCAYLLO"
+    },
+    {
+      "key": "fechaNegocio",
+      "value": "2026-09-03"
+    },
+    {
+      "key": "cierreTurnoId",
+      "value": ""
+    },
+    {
+      "key": "tanqueId",
+      "value": ""
+    },
+    {
+      "key": "productoIdGasohol90",
+      "value": "e032f8dc-af1e-44a2-851d-e0e6be27a223"
+    },
+    {
+      "key": "productoIdCompra",
+      "value": "f7ec806f-0e5c-4949-8110-b48469fd3ecf"
+    },
+    {
+      "key": "compraId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Obtener token M2M (Cognito)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.access_token) {",
+                  "  pm.collectionVariables.set('accessToken', json.access_token);",
+                  "  console.log('accessToken guardado, expira en', json.expires_in, 'segundos');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{clientId}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{clientSecret}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "{{scope}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{tokenUrl}}",
+              "host": [
+                "{{tokenUrl}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cierres-turno",
+      "item": [
+        {
+          "name": "POST /cierres-turno",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"codigoEstacion\": \"{{estacionCodigo}}\",\n  \"isla\": \"ISLA-1\",\n  \"turno\": \"TURNO1\",\n  \"fechaNegocio\": \"{{fechaNegocio}}\",\n  \"fechaInicio\": \"2026-09-03T06:00:00-05:00\",\n  \"fecha\": \"2026-09-03T14:05:00-05:00\",\n  \"total\": 4820.50,\n  \"facturasEmitidas\": 12,\n  \"empleado\": { \"codigo\": \"EMP-014\", \"nombre\": \"Juan Pérez\" },\n  \"pagos\": [\n    { \"medio\": \"EFECTIVO\", \"monto\": 1720.50 },\n    { \"medio\": \"TARJETA\", \"monto\": 2100.00 },\n    { \"medio\": \"YAPE\", \"monto\": 1000.00 }\n  ],\n  \"detalle\": [\n    {\n      \"productoId\": \"{{productoIdGasohol90}}\",\n      \"codigoLocal\": \"GAS90\",\n      \"producto\": \"Gasohol 90 (Regular)\",\n      \"medida\": \"GAL\",\n      \"totalCantidad\": 420.500,\n      \"totalSoles\": 3153.75,\n      \"despachoCantidad\": 415.000,\n      \"despachoSoles\": 3115.00,\n      \"calibracionCantidad\": 5.500,\n      \"calibracionSoles\": 38.75\n    },\n    {\n      \"codigoLocal\": \"BALON10\",\n      \"producto\": \"Balón de gas 10kg\",\n      \"medida\": \"UND\",\n      \"totalCantidad\": 15,\n      \"totalSoles\": 1666.75,\n      \"categoria\": \"NO_COMBUSTIBLE\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cierres-turno",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cierres-turno"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /cierres-turno (listar)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cierres-turno?estacionCodigo={{estacionCodigo}}&fechaDesde=2026-09-01&fechaHasta=2026-09-03&estado=ACTIVO&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cierres-turno"
+              ],
+              "query": [
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                },
+                {
+                  "key": "fechaDesde",
+                  "value": "2026-09-01"
+                },
+                {
+                  "key": "fechaHasta",
+                  "value": "2026-09-03"
+                },
+                {
+                  "key": "turno",
+                  "value": "TURNO1",
+                  "disabled": true
+                },
+                {
+                  "key": "usuarioCodigo",
+                  "value": "EMP-014",
+                  "disabled": true
+                },
+                {
+                  "key": "estado",
+                  "value": "ACTIVO"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /cierres-turno/{id} (detalle)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cierres-turno/{{cierreTurnoId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cierres-turno",
+                "{{cierreTurnoId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cierres-dia",
+      "item": [
+        {
+          "name": "POST /cierres-dia",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"codigoEstacion\": \"{{estacionCodigo}}\",\n  \"fechaNegocio\": \"{{fechaNegocio}}\",\n  \"fecha\": \"2026-09-03T22:15:00-05:00\",\n  \"total\": 18500.00,\n  \"administrador\": { \"codigo\": \"ADM-002\", \"nombre\": \"María Gómez\" },\n  \"cierresTurnoIds\": [\n    \"REEMPLAZAR-CON-UUID-DEL-CIERRE-DE-TURNO\"\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cierres-dia",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cierres-dia"
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /cierres-dia (listar)",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cierres-dia?estacionCodigo={{estacionCodigo}}&fechaDesde=2026-09-01&fechaHasta=2026-09-03&estado=ACTIVO",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cierres-dia"
+              ],
+              "query": [
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                },
+                {
+                  "key": "fechaDesde",
+                  "value": "2026-09-01"
+                },
+                {
+                  "key": "fechaHasta",
+                  "value": "2026-09-03"
+                },
+                {
+                  "key": "estado",
+                  "value": "ACTIVO"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "compras",
+      "item": [
+        {
+          "name": "POST /compras",
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"codigoEstacion\": \"{{estacionCodigo}}\",\n  \"productoId\": \"f7ec806f-0e5c-4949-8110-b48469fd3ecf\",\n  \"proveedor\": \"Petroperú\",\n  \"fecha\": \"2026-09-02T10:00:00-05:00\",\n  \"cantidad\": 3000.0,\n  \"costoUnitario\": 14.25,\n  \"numeroGuia\": \"T001-000123\",\n  \"destinos\": [\n    {\n      \"tanqueId\": \"{{tanqueId}}\",\n      \"cantidad\": 2980.0\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras"
+              ]
+            },
+            "description": "v1.65: productoId ahora es opcional (compras de mercadería fuera del catálogo cruzado mandan productoNombre + categoria en su lugar); tanqueId suelto reemplazado por destinos[] (reparto a uno o varios tanques, incluso de otra estación -- la diferencia entre cantidad y la suma de destinos es merma real, calculada por el backend)."
+          }
+        },
+        {
+          "name": "PUT /compras/{id}",
+          "request": {
+            "method": "PUT",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"proveedor\": \"Petroperú (corregido)\",\n  \"cantidad\": 2950.0,\n  \"destinos\": [\n    {\n      \"tanqueId\": \"{{tanqueId}}\",\n      \"cantidad\": 2930.0\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/compras/{{compraId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "compras",
+                "{{compraId}}"
+              ]
+            },
+            "description": "v1.66: PUT parcial -- manda solo los campos que quieras cambiar (cabecera y/o destinos[], que reemplaza por completo el reparto anterior). Para anular en vez de editar, manda { \"estado\": \"ANULADO\" } como único campo (soft-delete, no hay DELETE físico); \"estado\": \"ACTIVO\" reactiva."
+          }
+        }
+      ]
+    },
+    {
+      "name": "tanques",
+      "item": [
+        {
+          "name": "GET /tanques",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tanques?estacionCodigo={{estacionCodigo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanques"
+              ],
+              "query": [
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PUT /tanques/{id}",
+          "request": {
+            "method": "PUT",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productoId\": \"{{productoIdCompra}}\",\n  \"capacidad\": 10000,\n  \"stockMinimo\": 1500,\n  \"activo\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tanques/{{tanqueId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanques",
+                "{{tanqueId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reportes",
+      "item": [
+        {
+          "name": "GET /reportes/dia",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reportes/dia?fechaNegocio={{fechaNegocio}}&estacionCodigo={{estacionCodigo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reportes",
+                "dia"
+              ],
+              "query": [
+                {
+                  "key": "fechaNegocio",
+                  "value": "{{fechaNegocio}}"
+                },
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /reportes/dia/documento",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reportes/dia/documento?fechaNegocio={{fechaNegocio}}&estacionCodigo={{estacionCodigo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reportes",
+                "dia",
+                "documento"
+              ],
+              "query": [
+                {
+                  "key": "fechaNegocio",
+                  "value": "{{fechaNegocio}}"
+                },
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                }
+              ]
+            },
+            "description": "v1.60: variante de GET /reportes/dia que devuelve una URL firmada de S3 a un PDF ya renderizado, en vez de JSON (contrato acordado con notificaciones-whatsapp). Sin estacionCodigo y con un token cross-estacion arma el PDF consolidado de todas las estaciones del token, en vez del 400 que tira GET /reportes/dia."
+          }
+        },
+        {
+          "name": "GET /reportes/margen",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reportes/margen?fechaDesde=2026-08-01&fechaHasta=2026-08-31&estacionCodigo={{estacionCodigo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reportes",
+                "margen"
+              ],
+              "query": [
+                {
+                  "key": "fechaDesde",
+                  "value": "2026-08-01"
+                },
+                {
+                  "key": "fechaHasta",
+                  "value": "2026-08-31"
+                },
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /reportes/abastecimiento",
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reportes/abastecimiento?estacionCodigo={{estacionCodigo}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reportes",
+                "abastecimiento"
+              ],
+              "query": [
+                {
+                  "key": "estacionCodigo",
+                  "value": "{{estacionCodigo}}"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

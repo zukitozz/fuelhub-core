@@ -69,7 +69,7 @@ export class ObtenerReporteDiaDocumento {
       if (reporte === null) {
         throw new RecursoNoEncontradoError('Cierre de día', `${estacionCodigo} / ${fechaNegocio}`);
       }
-      const turnos = await this.repo.listarTurnos({ estacionCodigo, fechaNegocio });
+      const turnos = await this.repo.listarTurnos(reporte.cierreDiaId);
       buffer = await this.renderer.renderizarPdf({ modo: 'individual', estacion: { reporte, turnos } });
       key = `reportes-dia/${fechaNegocio}/${estacionCodigo}-${Date.now()}.pdf`;
     } else {
@@ -120,7 +120,7 @@ export class ObtenerReporteDiaDocumento {
       codigos.map(async (estacionCodigo): Promise<ReporteDiaEstacionDocumentoDTO | null> => {
         const reporte = await this.repo.obtener({ estacionCodigo, fechaNegocio });
         if (reporte === null) return null;
-        const turnos = await this.repo.listarTurnos({ estacionCodigo, fechaNegocio });
+        const turnos = await this.repo.listarTurnos(reporte.cierreDiaId);
         return { reporte, turnos };
       })
     );

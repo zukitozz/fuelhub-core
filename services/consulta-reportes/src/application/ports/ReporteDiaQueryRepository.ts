@@ -83,13 +83,21 @@ export interface ReporteDiaQueryRepository {
   listarCodigosEstacionesActivas(): Promise<string[]>;
 
   /**
-   * Los `cierres_turno` ACTIVOS de una estación+fecha, ordenados por
+   * Los `cierres_turno` ACTIVOS vinculados a un `cierres_dia` puntual (su
+   * `cierreDiaId`, el mismo que trae `ReporteDiaDTO`), ordenados por
    * `fecha_inicio`, cada uno con su propio desglose por producto (v1.62) --
    * usado solo por `ObtenerReporteDiaDocumento` para el PDF. Lista vacía
    * cuando no hubo ningún cierre de turno ese día (posible aunque exista un
    * `cierres_dia` para la fecha, si el POS mandó el cierre de día sin pasar
    * antes por cierres de turno individuales -- no se asume que siempre haya
    * al menos uno).
+   *
+   * v1.76: recibe `cierreDiaId` en vez de `FiltrosReporteDia` -- antes
+   * re-filtraba por `estacionCodigo`+`fechaNegocio` sobre `cierres_turno`,
+   * independiente del `cierres_dia` puntual que ya se resolvió en `obtener()`
+   * (ambiguo cuando hay más de un `cierres_dia` "ACTIVO" para la misma
+   * estación+fecha -- hallazgo real de Jorge). Ahora cuelga directo del `id`
+   * ya resuelto, igual que `obtenerProductos` internamente.
    */
-  listarTurnos(filtros: FiltrosReporteDia): Promise<ReporteDiaTurnoDTO[]>;
+  listarTurnos(cierreDiaId: string): Promise<ReporteDiaTurnoDTO[]>;
 }

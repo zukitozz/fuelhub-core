@@ -22,6 +22,15 @@
 // motivo válido). Con el conflicto ya acotado a la propia estación, el
 // UPSERT de abajo ya no necesita el `WHERE`/chequeo manual de "otra
 // estación" — un conflicto entre estaciones distintas no puede ocurrir.
+//
+// v1.76: el payload ahora exige `cierresTurnoIds` (hallazgo real de Jorge en
+// el reporte de un día concreto) — ver `vincularCierresTurno` más abajo. Se
+// agrega un tercer paso a la transacción, después del INSERT de la cabecera:
+// vincular esos `cierres_turno.cierre_dia_id` al `cierres_dia` recién creado.
+// Sin esto, ese campo queda NULL para siempre (ningún otro caso de uso lo
+// escribe) y `PostgresReporteDiaQueryRepository` no tiene forma no-ambigua de
+// saber qué turnos pertenecen a qué día cuando hay más de un `cierres_dia`
+// para la misma estación+fecha.
 
 import {
   BeginTransactionCommand,
@@ -71,6 +80,8 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
       const usuarioId = await this.resolverOAutoprovisionarAdministrador(datos.administrador, estacionId, transactionId);
 
       const cabecera = await this.insertarCabecera(datos, estacionId, usuarioId, transactionId);
+
+      await this.vincularCierresTurno(datos.cierresTurnoIds, cabecera.id, estacionId, transactionId);
 
       await conReintentoSiDbEstaResumiendo(() => this.client.send(
         new CommitTransactionCommand({
@@ -149,6 +160,60 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
       throw new Error('INSERT ... ON CONFLICT sobre usuarios no devolvió ninguna fila (ver v1.75).');
     }
     return String(fila.id);
+  }
+
+  /**
+   * v1.76 -- vincula cada `cierres_turno.id` recibido con el `cierres_dia`
+   * recién insertado, DENTRO de la misma transacción. Mismo motivo que el
+   * hallazgo documentado en `PostgresReporteDiaQueryRepository.ts`: sin este
+   * `UPDATE`, `cierre_dia_id` queda NULL para siempre y los reportes no
+   * tienen forma no-ambigua de saber qué turnos pertenecen a qué día.
+   *
+   * `IN (CAST(:id0 AS uuid), ...)` en vez de un solo parámetro de array --
+   * mismo criterio que `PostgresCierreTurnoIngestaRepository.validarProductos`
+   * (v1.51): RDS Data API rechaza `arrayValue` en runtime.
+   *
+   * Si `RETURNING` trae menos filas que `cierresTurnoIds.length`, algún id no
+   * existe, es de otra estación, no está `ACTIVO`, o ya tenía un
+   * `cierre_dia_id` asignado -- se rechaza el cierre de día COMPLETO (decisión
+   * de Jorge: nada de best-effort acá) lanzando, lo que hace que el `catch`
+   * de `registrar()` haga ROLLBACK de todo, INSERT de la cabecera incluido.
+   */
+  private async vincularCierresTurno(
+    cierresTurnoIds: readonly string[],
+    cierreDiaId: string,
+    estacionId: string,
+    transactionId: string
+  ): Promise<void> {
+    const idsUnicos = [...new Set(cierresTurnoIds)];
+    const placeholders = idsUnicos.map((_, i) => `CAST(:id${i} AS uuid)`).join(', ');
+    const filas = await this.ejecutar(
+      `UPDATE cierres_turno
+       SET cierre_dia_id = CAST(:cierreDiaId AS uuid)
+       WHERE id IN (${placeholders})
+         AND estacion_id = CAST(:estacionId AS uuid)
+         AND estado = 'ACTIVO'
+         AND cierre_dia_id IS NULL
+       RETURNING id`,
+      [
+        paramText('cierreDiaId', cierreDiaId),
+        paramText('estacionId', estacionId),
+        ...idsUnicos.map((id, i) => paramText(`id${i}`, id)),
+      ],
+      transactionId
+    );
+
+    if (filas.length !== idsUnicos.length) {
+      const vinculados = new Set(filas.map((f) => String(f.id)));
+      const noMatchean = idsUnicos.filter((id) => !vinculados.has(id));
+      throw new ParametrosInvalidosError(
+        'Uno o más cierresTurnoIds no se pudieron vincular a este cierre de día.',
+        noMatchean.map((id) => ({
+          field: 'cierresTurnoIds',
+          issue: `id ${id}: no existe, no es de ${estacionId}, no está ACTIVO, o ya tiene un cierre de día asignado`,
+        }))
+      );
+    }
   }
 
   private async insertarCabecera(
