@@ -10,6 +10,18 @@
 // `administrador` (sección 3.9/11) no lo trae, así que el auto-provisioning
 // de abajo no lo incluye en el INSERT y queda en NULL (mismo criterio que
 // `ingest-cierre-turno`, ver el comentario extendido ahí).
+//
+// v1.75: `usuarios` pasó de UNIQUE global sobre `usuario` a UNIQUE
+// COMPUESTO `(estacion_id, usuario)` (migración
+// 1788500000000_usuario-unico-por-estacion.sql) — la suposición original de
+// la sección 9.7 (un código de persona nunca se repite entre estaciones)
+// resultó incorrecta: cada estación es una empresa distinta con su propio
+// sistema legacy asignando códigos de forma independiente, y dos personas
+// reales en dos estaciones distintas SÍ pueden compartir código por
+// coincidencia (hallazgo real de Jorge, `POST /cierres-dia` rechazado sin
+// motivo válido). Con el conflicto ya acotado a la propia estación, el
+// UPSERT de abajo ya no necesita el `WHERE`/chequeo manual de "otra
+// estación" — un conflicto entre estaciones distintas no puede ocurrir.
 
 import {
   BeginTransactionCommand,
@@ -54,12 +66,9 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
         ]);
       }
 
+      // v1.75: ya no puede devolver `undefined` — ver la nota de cabecera
+      // sobre el UNIQUE compuesto `(estacion_id, usuario)`.
       const usuarioId = await this.resolverOAutoprovisionarAdministrador(datos.administrador, estacionId, transactionId);
-      if (!usuarioId) {
-        throw new ParametrosInvalidosError('administrador.codigo ya está registrado en otra estación.', [
-          { field: 'administrador.codigo', issue: 'pertenece a una estación distinta — ver sección 9.7' },
-        ]);
-      }
 
       const cabecera = await this.insertarCabecera(datos, estacionId, usuarioId, transactionId);
 
@@ -111,23 +120,35 @@ export class PostgresCierreDiaIngestaRepository implements CierreDiaIngestaRepos
     administrador: AdministradorInput,
     estacionId: string,
     transactionId: string
-  ): Promise<string | undefined> {
+  ): Promise<string> {
     // Mismo UPSERT atómico que en ingest-cierre-turno, con `rol = 'ADMINISTRADOR'`
     // (sección 3.7.1) — ver el comentario extendido en
     // `PostgresCierreTurnoIngestaRepository.ts` sobre por qué es atómico y no
     // "buscar, decidir, insertar" en dos pasos. `correo` se omite del INSERT
     // (columna nullable desde v1.47) porque el payload no lo trae.
+    //
+    // v1.75: `ON CONFLICT (estacion_id, usuario)` (antes `ON CONFLICT
+    // (usuario)` + `WHERE` manual) — con el UNIQUE ya compuesto, el
+    // conflicto solo puede darse dentro de la MISMA estación, así que el
+    // `DO UPDATE` siempre se aplica y `RETURNING` siempre trae una fila.
     const filas = await this.ejecutar(
       `INSERT INTO usuarios (estacion_id, usuario, nombre, rol)
        VALUES (CAST(:estacionId AS uuid), :usuario, :nombre, 'ADMINISTRADOR')
-       ON CONFLICT (usuario) DO UPDATE
+       ON CONFLICT (estacion_id, usuario) DO UPDATE
          SET nombre = EXCLUDED.nombre, actualizado_en = now()
-         WHERE usuarios.estacion_id = EXCLUDED.estacion_id
        RETURNING id`,
       [paramText('estacionId', estacionId), paramText('usuario', administrador.codigo), paramText('nombre', administrador.nombre)],
       transactionId
     );
-    return filas[0] ? String(filas[0].id) : undefined;
+    const fila = filas[0];
+    if (!fila) {
+      // No debería ocurrir tras el UNIQUE compuesto (estacion_id, usuario)
+      // de v1.75 -- el UPSERT siempre inserta o actualiza exactamente una
+      // fila. Si esto se dispara, es un bug real (o el índice cambió sin
+      // actualizar este comentario), no un error de datos del cliente.
+      throw new Error('INSERT ... ON CONFLICT sobre usuarios no devolvió ninguna fila (ver v1.75).');
+    }
+    return String(fila.id);
   }
 
   private async insertarCabecera(

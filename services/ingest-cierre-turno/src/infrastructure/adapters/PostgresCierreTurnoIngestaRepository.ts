@@ -11,14 +11,24 @@
 // auto-provisionado "huérfano" de un cierre que terminó fallando.
 //
 // Nota sobre el auto-provisioning del empleado (sección 3.7): se resuelve con
-// un único `INSERT ... ON CONFLICT (usuario) DO UPDATE ... WHERE ... RETURNING`
+// un único `INSERT ... ON CONFLICT (estacion_id, usuario) DO UPDATE ... RETURNING`
 // en vez de "buscar, decidir, y luego insertar/actualizar" — ese patrón de dos
 // pasos tiene una condición de carrera real (dos cierres del mismo operador
-// llegando casi al mismo tiempo). El UPSERT es atómico: si la fila en
-// conflicto tiene un `estacion_id` distinto, el `WHERE` de la cláusula
-// `DO UPDATE` no se cumple, Postgres no actualiza nada, y `RETURNING` no
-// devuelve fila — eso es la señal de "empleado pertenece a otra estación",
-// sin necesitar un SELECT previo.
+// llegando casi al mismo tiempo). El UPSERT es atómico.
+//
+// v1.75: `usuarios` pasó de UNIQUE global sobre `usuario` a UNIQUE COMPUESTO
+// `(estacion_id, usuario)` (migración
+// 1788500000000_usuario-unico-por-estacion.sql) — la suposición original de
+// la sección 9.7 (un código de persona nunca se repite entre estaciones)
+// resultó incorrecta: cada estación es una empresa distinta con su propio
+// sistema legacy asignando códigos de forma independiente, y dos personas
+// reales en dos estaciones distintas SÍ pueden compartir código por
+// coincidencia (hallazgo real de Jorge). Antes, si la fila en conflicto
+// tenía un `estacion_id` distinto, el `WHERE` de la cláusula `DO UPDATE` no
+// se cumplía y `RETURNING` no devolvía fila — esa era la señal (incorrecta)
+// de "empleado pertenece a otra estación". Con el conflicto ya acotado por
+// el propio índice `UNIQUE` a la misma estación, eso no puede ocurrir más:
+// el `DO UPDATE` siempre se aplica y `RETURNING` siempre trae una fila.
 //
 // `usuarios.correo` (DDL 3.3) es NULLABLE desde v1.47 — el payload de
 // `empleado` (sección 3.9) solo trae `{ codigo, nombre }`, nunca un correo,
@@ -71,12 +81,9 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
 
       const categoriaPorProductoId = await this.validarProductos(datos.detalle, transactionId);
 
+      // v1.75: ya no puede devolver `undefined` — ver la nota de cabecera
+      // sobre el UNIQUE compuesto `(estacion_id, usuario)`.
       const usuarioId = await this.resolverOAutoprovisionarEmpleado(datos.empleado, estacionId, transactionId);
-      if (!usuarioId) {
-        throw new ParametrosInvalidosError('empleado.codigo ya está registrado en otra estación.', [
-          { field: 'empleado.codigo', issue: 'pertenece a una estación distinta — ver sección 9.7' },
-        ]);
-      }
 
       const cabecera = await this.insertarCabecera(datos, estacionId, usuarioId, transactionId);
       const pagos = await this.insertarPagos(cabecera.id, datos.pagos, transactionId);
@@ -181,20 +188,30 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
     empleado: EmpleadoInput,
     estacionId: string,
     transactionId: string
-  ): Promise<string | undefined> {
+  ): Promise<string> {
     // Ver nota de cabecera del archivo: `correo` no viene en el payload, y
     // desde v1.47 la columna es nullable — se omite del INSERT y queda NULL.
+    //
+    // v1.75: `ON CONFLICT (estacion_id, usuario)` (antes `ON CONFLICT
+    // (usuario)` + `WHERE` manual) — ver la nota de cabecera del archivo.
     const filas = await this.ejecutar(
       `INSERT INTO usuarios (estacion_id, usuario, nombre, rol)
        VALUES (CAST(:estacionId AS uuid), :usuario, :nombre, 'OPERADOR')
-       ON CONFLICT (usuario) DO UPDATE
+       ON CONFLICT (estacion_id, usuario) DO UPDATE
          SET nombre = EXCLUDED.nombre, actualizado_en = now()
-         WHERE usuarios.estacion_id = EXCLUDED.estacion_id
        RETURNING id`,
       [paramText('estacionId', estacionId), paramText('usuario', empleado.codigo), paramText('nombre', empleado.nombre)],
       transactionId
     );
-    return filas[0] ? String(filas[0].id) : undefined;
+    const fila = filas[0];
+    if (!fila) {
+      // No debería ocurrir tras el UNIQUE compuesto (estacion_id, usuario)
+      // de v1.75 -- el UPSERT siempre inserta o actualiza exactamente una
+      // fila. Si esto se dispara, es un bug real (o el índice cambió sin
+      // actualizar este comentario), no un error de datos del cliente.
+      throw new Error('INSERT ... ON CONFLICT sobre usuarios no devolvió ninguna fila (ver v1.75).');
+    }
+    return String(fila.id);
   }
 
   private async insertarCabecera(
