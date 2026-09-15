@@ -34,6 +34,12 @@
 // verdad, hace falta agregarla al contrato de ingesta primero (fuera de
 // alcance de un cambio de renderizado).
 //
+// v1.77 -- a pedido de Jorge, en el desglose por turno "Inicio"/"Fin" pasan
+// de una línea de subtítulo separada (gris, debajo de la banda de título) a
+// ir en la misma banda de título, al lado del nombre del empleado --
+// `dibujarTablaProductos` pierde el parámetro `subtitulo` (sin más
+// llamadores tras este cambio).
+//
 // Todas las tablas de productos usan el mismo criterio de categoría que ya
 // existe en el DTO (v1.58): `categoria === 'COMBUSTIBLE'` va arriba con un
 // subtotal resaltado (calculado sumando SOLO las líneas visibles en esa
@@ -113,11 +119,21 @@ function dibujarFilaTabla(
 
 /**
  * Dibuja una tabla de productos completa (banda de título + encabezado de
- * columnas + líneas de combustible + subtotal resaltado + líneas no
- * combustible) a partir de X,Y dado, con el ancho indicado -- se usa tanto
- * para cada turno individual como para el resumen del día de una estación,
- * y para cada caja de la grilla del consolidado (v1.63). Devuelve el Y
- * donde terminó, para que el llamador siga dibujando debajo.
+ * columnas + líneas de combustible + líneas no combustible) a partir de
+ * X,Y dado, con el ancho indicado -- se usa tanto para cada turno
+ * individual como para el resumen del día de una estación, y para cada
+ * caja de la grilla del consolidado (v1.63). Devuelve el Y donde terminó,
+ * para que el llamador siga dibujando debajo.
+ *
+ * `totalAlFinal` (v1.77, a pedido de Jorge -- SOLO lo usa la portada
+ * consolidada): en vez del subtotal de SOLO combustible resaltado entre las
+ * líneas de combustible y las de no-combustible (el default, sin este
+ * flag), agrega una única fila de TOTAL GENERAL (combustible + no
+ * combustible) al final de la tabla, después de la última línea. No se
+ * activa en el desglose por turno ni en el resumen del día porque esas
+ * secciones ya muestran su propio total autoritativo (`turno.total`/
+ * `reporte.total`) aparte, debajo de la tabla -- duplicarlo ahí sería
+ * redundante.
  */
 function dibujarTablaProductos(
   doc: PDFKit.PDFDocument,
@@ -126,7 +142,7 @@ function dibujarTablaProductos(
   ancho: number,
   titulo: string,
   productos: readonly ReporteDiaProductoDTO[],
-  subtitulo?: string
+  totalAlFinal = false
 ): number {
   let y = yInicial;
   const anchoProducto = Math.round(ancho * 0.48);
@@ -138,13 +154,6 @@ function dibujarTablaProductos(
   doc.rect(x, y, ancho, ALTO_FILA).fillAndStroke(COLOR_BANDA_TITULO, COLOR_BORDE);
   doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9).text(titulo, x + 4, y + 4, { width: ancho - 8, lineBreak: false });
   y += ALTO_FILA;
-
-  if (subtitulo) {
-    y = asegurarEspacio(doc, y, 12);
-    doc.fillColor('#555555').font('Helvetica').fontSize(7).text(subtitulo, x + 2, y + 1, { width: ancho - 4 });
-    doc.fillColor('#000000');
-    y += 12;
-  }
 
   y = asegurarEspacio(doc, y, ALTO_FILA);
   dibujarFilaTabla(doc, x, y, anchos, ['Producto', 'Cantidad', 'Total'], { negrita: true, relleno: COLOR_ENCABEZADO_TABLA });
@@ -163,7 +172,7 @@ function dibujarTablaProductos(
     y += ALTO_FILA;
   }
 
-  if (combustible.length > 0) {
+  if (combustible.length > 0 && !totalAlFinal) {
     y = asegurarEspacio(doc, y, ALTO_FILA);
     dibujarFilaTabla(doc, x, y, anchos, ['', formatearCantidad(subtotalCombustible.cantidad), formatearMonto(subtotalCombustible.total)], {
       negrita: true,
@@ -181,6 +190,19 @@ function dibujarTablaProductos(
   if (productos.length === 0) {
     y = asegurarEspacio(doc, y, ALTO_FILA);
     dibujarFilaTabla(doc, x, y, anchos, ['(sin líneas de detalle)', '', '']);
+    y += ALTO_FILA;
+  }
+
+  if (totalAlFinal && productos.length > 0) {
+    const totalGeneral = productos.reduce(
+      (acc, p) => ({ cantidad: acc.cantidad + p.cantidadVendida, total: acc.total + p.ingresos }),
+      { cantidad: 0, total: 0 }
+    );
+    y = asegurarEspacio(doc, y, ALTO_FILA);
+    dibujarFilaTabla(doc, x, y, anchos, ['TOTAL', formatearCantidad(totalGeneral.cantidad), formatearMonto(totalGeneral.total)], {
+      negrita: true,
+      relleno: COLOR_SUBTOTAL,
+    });
     y += ALTO_FILA;
   }
 
@@ -235,12 +257,20 @@ export class PdfKitReporteDiaRenderer implements ReporteDiaRendererPort {
       if (!izquierda) continue; // no debería pasar (el loop nunca arranca en un índice vacío), guarda solo para TS
 
       y = asegurarEspacio(doc, y, ALTO_FILA * 3);
-      const yFinIzquierda = dibujarTablaProductos(doc, x, y, anchoCaja, izquierda.reporte.estacionCodigo, izquierda.reporte.productos);
+      const yFinIzquierda = dibujarTablaProductos(doc, x, y, anchoCaja, izquierda.reporte.estacionCodigo, izquierda.reporte.productos, true);
       totalGeneral += izquierda.reporte.total;
 
       let yFinDerecha = y;
       if (derecha) {
-        yFinDerecha = dibujarTablaProductos(doc, x + anchoCaja + espacioEntreCajas, y, anchoCaja, derecha.reporte.estacionCodigo, derecha.reporte.productos);
+        yFinDerecha = dibujarTablaProductos(
+          doc,
+          x + anchoCaja + espacioEntreCajas,
+          y,
+          anchoCaja,
+          derecha.reporte.estacionCodigo,
+          derecha.reporte.productos,
+          true
+        );
         totalGeneral += derecha.reporte.total;
       }
       y = Math.max(yFinIzquierda, yFinDerecha) + 20;
@@ -274,8 +304,8 @@ export class PdfKitReporteDiaRenderer implements ReporteDiaRendererPort {
       y = doc.y;
     } else {
       for (const turno of turnos) {
-        const subtitulo = `Inicio: ${turno.fechaInicio}   Fin: ${turno.fecha}`;
-        y = dibujarTablaProductos(doc, x, y, ancho, `${ETIQUETA_TURNO[turno.turno]} -- ${turno.empleado}`, turno.productos, subtitulo);
+        const titulo = `${ETIQUETA_TURNO[turno.turno]} -- ${turno.empleado}  (Inicio: ${turno.fechaInicio}  Fin: ${turno.fecha})`;
+        y = dibujarTablaProductos(doc, x, y, ancho, titulo, turno.productos);
         y = asegurarEspacio(doc, y, 14);
         doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9).text(`Total del turno: ${formatearMonto(turno.total)}`, x, y + 2, { width: ancho, align: 'right' });
         doc.font('Helvetica');
