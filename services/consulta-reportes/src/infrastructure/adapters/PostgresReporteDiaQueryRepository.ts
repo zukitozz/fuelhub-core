@@ -105,8 +105,7 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
     const totales = productos.reduce(
       (acc, p) => {
         if (p.categoria === 'COMBUSTIBLE') acc.totalCombustible += p.ingresos;
-        else if (p.categoria === 'NO_COMBUSTIBLE') acc.totalNoCombustible += p.ingresos;
-        else acc.totalSinClasificar += p.ingresos;
+        else acc.totalNoCombustible += p.ingresos;
         return acc;
       },
       { totalCombustible: 0, totalNoCombustible: 0, totalSinClasificar: 0 }
