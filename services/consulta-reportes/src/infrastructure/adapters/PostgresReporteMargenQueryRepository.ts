@@ -17,6 +17,19 @@
 // `costo_promedio` (que sale de `compras.producto_id`, siempre NOT NULL)
 // — su costo simplemente no se estima, igual que en la consulta de 3.8.2.b.
 //
+// [CORREGIDO -- hallazgo real de Jorge, 2026-09-14] El CTE `ventas` usaba
+// `despacho_cantidad`/`despacho_soles` a secas (sin fallback a `total_*`),
+// bajo el supuesto -- documentado en `PostgresReporteDiaQueryRepository.ts`,
+// ahora sabido incorrecto -- de que esos campos eran la venta real
+// descontando calibración. Según Jorge, `despacho_*` son las NOTAS DE
+// DESPACHO (documentos que se acumulan para facturar a fin de mes), no el
+// monto de venta del período. Además de calcular mal `ingresos`/
+// `cantidad_vendida`, el `SUM` sin `COALESCE` descartaba EN SILENCIO
+// cualquier línea sin `despacho_*` (¡la mayoría, probablemente!) porque
+// `SUM` ignora `NULL` -- este reporte venía subestimando ingresos/margen de
+// forma sistemática. Ahora usa `COALESCE(total_cantidad/total_soles, 0)`,
+// igual que `PostgresReporteDiaQueryRepository`.
+//
 // Solo lectura, sin transacción explícita (mismo criterio que
 // consulta-cierres: no hay escritura que proteger).
 
@@ -96,8 +109,8 @@ export class PostgresReporteMargenQueryRepository implements ReporteMargenQueryR
       ),
       ventas AS (
         SELECT ct.estacion_id, ctd.producto_id,
-               SUM(ctd.despacho_cantidad) AS cantidad_vendida,
-               SUM(ctd.despacho_soles)    AS ingresos
+               SUM(COALESCE(ctd.total_cantidad, 0)) AS cantidad_vendida,
+               SUM(COALESCE(ctd.total_soles, 0))    AS ingresos
         FROM cierres_turno_detalle ctd
         JOIN cierres_turno ct ON ct.id = ctd.cierre_turno_id
         ${whereVentas}

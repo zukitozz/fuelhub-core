@@ -28,19 +28,26 @@
 //      turnos (sin backfill retroactivo); esos días seguirán devolviendo
 //      `productos`/`turnos` vacíos aunque el `cierres_dia.total` sí exista.
 //
-//   2. `ingresos`/`cantidadVendida` por producto usan
-//      `COALESCE(despacho_*, total_*, 0)`, no `despacho_*` a secas (que sí
-//      usan margen/abastecimiento). Motivo: `despacho_cantidad`/`despacho_soles`
-//      son OPCIONALES en el contrato de `detalle[i]` (pensados para separar
-//      venta real de calibración/"Serafín" en productos que salen de un
-//      surtidor, ver changelog v1.55) — una línea sin concepto de
-//      calibración (balón de gas, mercadito) puede llegar sin esos dos
-//      campos. Sin este fallback, cualquier venta no-combustible que no
-//      mande `despacho*` explícito contaría como 0 en `totalNoCombustible`,
-//      justo el número que este endpoint existe para reportarle bien al bot
-//      de WhatsApp (contrato v1.57). No se retrocede este mismo fallback a
-//      `PostgresReporteMargenQueryRepository` en esta entrada — separado,
-//      pendiente, ver changelog.
+//   2. [CORREGIDO -- hallazgo real de Jorge, 2026-09-14] `ingresos`/
+//      `cantidadVendida` por producto usan `COALESCE(total_cantidad, 0)`/
+//      `COALESCE(total_soles, 0)` -- NUNCA `despacho_cantidad`/`despacho_soles`.
+//      Hasta esta entrada se usaba `COALESCE(despacho_*, total_*, 0)` bajo el
+//      supuesto (documentado acá mismo, ahora sabido incorrecto) de que
+//      `despacho_*` separaba venta real de calibración/"Serafín". El
+//      significado real, según Jorge: `despacho_*` son las NOTAS DE
+//      DESPACHO -- documentos que se acumulan para facturar recién a fin de
+//      mes por su total, NO el monto de la venta del día. Usarlos acá
+//      inflaba/alteraba `totalNoCombustible`/`cantidadVendida` con importes
+//      que no correspondían al día reportado. `total_cantidad`/`total_soles`
+//      SÍ son el monto real de cada línea de venta (siempre vienen —
+//      `validarCierreTurno` los exige, sección 3.8.1).
+//
+//      `PostgresReporteMargenQueryRepository` usa `despacho_cantidad`/
+//      `despacho_soles` a secas (sin COALESCE a `total_*`) en su CTE
+//      `ventas` -- con este mismo hallazgo, es MUY probable que tenga el
+//      mismo problema (y que además esté descartando en silencio cualquier
+//      línea sin `despacho_*`, porque `SUM` ignora NULL). No se toca en esta
+//      entrada -- confirmar con Jorge antes de replicar el fix ahí.
 //
 // Se resuelve la categoría con `COALESCE(ctd.categoria, pm.categoria)`: para
 // líneas con `producto_id`, esto también repara "gratis" cualquier fila
@@ -155,8 +162,8 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
                  ctd.producto_id                                    AS producto_id,
                  COALESCE(pm.nombre, ctd.producto_nombre)           AS producto,
                  COALESCE(ctd.categoria, pm.categoria)               AS categoria,
-                 SUM(COALESCE(ctd.despacho_cantidad, ctd.total_cantidad, 0)) AS cantidad_vendida,
-                 SUM(COALESCE(ctd.despacho_soles, ctd.total_soles, 0))       AS ingresos
+                 SUM(COALESCE(ctd.total_cantidad, 0)) AS cantidad_vendida,
+                 SUM(COALESCE(ctd.total_soles, 0))    AS ingresos
           FROM cierres_turno_detalle ctd
           JOIN cierres_turno ct          ON ct.id = ctd.cierre_turno_id
           LEFT JOIN productos_maestro pm ON pm.id = ctd.producto_id
@@ -222,8 +229,8 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
       SELECT ctd.producto_id                              AS producto_id,
              COALESCE(pm.nombre, ctd.producto_nombre)      AS producto,
              COALESCE(ctd.categoria, pm.categoria)          AS categoria,
-             SUM(COALESCE(ctd.despacho_cantidad, ctd.total_cantidad, 0)) AS cantidad_vendida,
-             SUM(COALESCE(ctd.despacho_soles, ctd.total_soles, 0))       AS ingresos
+             SUM(COALESCE(ctd.total_cantidad, 0)) AS cantidad_vendida,
+             SUM(COALESCE(ctd.total_soles, 0))    AS ingresos
       FROM cierres_turno_detalle ctd
       JOIN cierres_turno ct           ON ct.id = ctd.cierre_turno_id
       LEFT JOIN productos_maestro pm  ON pm.id = ctd.producto_id

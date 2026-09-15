@@ -29,6 +29,16 @@
 //      seguiría contando para `LAG(fecha)`/`dias_entre_compras`, distorsionando
 //      la frecuencia real de reabastecimiento.
 //
+//   4. [CORREGIDO -- hallazgo real de Jorge, 2026-09-14] `venta_diaria` usaba
+//      `SUM(ctd.despacho_cantidad)` a secas. Mismo hallazgo que en
+//      `PostgresReporteDiaQueryRepository`/`PostgresReporteMargenQueryRepository`:
+//      `despacho_*` son las NOTAS DE DESPACHO (facturación mensual), no la
+//      venta real del período, y al no tener `COALESCE` el `SUM` descartaba
+//      en silencio cualquier línea sin `despacho_cantidad`. Eso subestimaba
+//      `venta_promedio_diaria` -> sobreestimaba `dias_de_autonomia_estimados`
+//      -> podía esconder estaciones que en realidad SÍ estaban `en_riesgo`.
+//      Ahora usa `COALESCE(total_cantidad, 0)`.
+//
 // Solo lectura, sin transacción explícita.
 
 import { ExecuteStatementCommand, RDSDataClient, type SqlParameter } from '@aws-sdk/client-rds-data';
@@ -69,7 +79,7 @@ export class PostgresReporteAbastecimientoQueryRepository implements ReporteAbas
     const sql = `
       WITH venta_diaria AS (
         SELECT ct.estacion_id, ctd.producto_id,
-               SUM(ctd.despacho_cantidad) / GREATEST(COUNT(DISTINCT ct.fecha_negocio), 1) AS venta_promedio_diaria
+               SUM(COALESCE(ctd.total_cantidad, 0)) / GREATEST(COUNT(DISTINCT ct.fecha_negocio), 1) AS venta_promedio_diaria
         FROM cierres_turno_detalle ctd
         JOIN cierres_turno ct ON ct.id = ctd.cierre_turno_id
         WHERE ct.fecha_negocio >= CURRENT_DATE - INTERVAL '30 days'
