@@ -1526,16 +1526,26 @@ paths:
       description: >
         v1.60 — variante de GET /reportes/dia pensada para
         `notificaciones-whatsapp`: en vez de JSON, devuelve una URL firmada
-        de S3 al PDF ya renderizado, para mandarlo directo como adjunto por
-        WhatsApp Cloud API. Con `estacionCodigo` puntual (o un token de una
-        sola estación que lo omite), el PDF es el reporte de esa estación
-        sola. Sin `estacionCodigo` y con un token cross-estación
-        (multi-estación explícito, o wildcard "*" — hoy solo el App Client
-        `fuelhub-notificaciones-whatsapp`), el PDF consolida TODAS las
-        estaciones a las que el token tiene acceso, en vez del 400 que tira
-        GET /reportes/dia en ese mismo caso. La URL devuelta no requiere
-        autenticación adicional para descargarla y expira a los `expiraEn`
-        segundos. Lambda separado (`consulta-reportes`, `handler-documento.ts`).
+        de S3 al PDF. Con `estacionCodigo` puntual (o un token de una sola
+        estación que lo omite), el PDF es el reporte de esa estación sola.
+        Sin `estacionCodigo` y con un token wildcard ("*" — hoy solo el App
+        Client `fuelhub-notificaciones-whatsapp`), el PDF es el CONSOLIDADO
+        de todas las estaciones activas del grupo. La URL devuelta no
+        requiere autenticación adicional para descargarla y expira a los
+        `expiraEn` segundos. Lambda separado (`consulta-reportes`,
+        `handler-documento.ts`).
+
+        v1.78 — el PDF YA NO se genera en este request: se genera una sola
+        vez, apenas se registra el cierre de día (evento
+        `CierreDiaRegistrado`), y este endpoint solo sirve la URL firmada
+        de S3. Si el PDF todavía no existe (llega antes de que termine de
+        generarse, o es un cierre de día anterior a v1.78, sin backfill),
+        responde `404`. Además, el CONSOLIDADO deja de poder acotarse por
+        token: ahora es un único archivo por fecha con TODAS las estaciones
+        activas, así que un token multi-estación explícito (no wildcard)
+        que omita `estacionCodigo` recibe `403` en vez de un consolidado
+        recortado a su alcance (caso hoy teórico — ningún App Client real
+        tiene más de una estación en su scope salvo el wildcard).
       operationId: obtenerReporteDiaDocumento
       x-required-scope: fuelhub-api/cierres.read
       parameters:
@@ -1545,14 +1555,16 @@ paths:
           required: false
           description: >
             Igual que en GET /reportes/dia, pero acá omitirlo con un token
-            cross-estación NO es un error: dispara el PDF consolidado de
-            todas las estaciones del token, en vez de un 400.
+            wildcard NO es un error: resuelve al PDF CONSOLIDADO de todas
+            las estaciones activas del grupo, en vez de un 400 (v1.78 —
+            omitirlo con un token multi-estación explícito, no wildcard, sí
+            es un 403 — ver la descripción del endpoint).
           schema:
             type: string
           example: "CHANCAYLLO"
       responses:
         '200':
-          description: URL firmada al PDF generado (individual o consolidado, según el caso — ver la descripción de arriba).
+          description: URL firmada al PDF pre-generado (individual o CONSOLIDADO, según el caso — ver la descripción de arriba).
           content:
             application/json:
               schema:

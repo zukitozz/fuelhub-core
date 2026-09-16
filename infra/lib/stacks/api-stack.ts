@@ -17,6 +17,9 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import { Runtime } from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { Construct } from 'constructs';
 import * as path from 'node:path';
 import { AuthenticatedEndpoint } from '../constructs/authenticated-endpoint';
@@ -53,6 +56,13 @@ function entryDe(servicio: string): string {
 // grande junto a `ConsultaReportesDiaDocumento` más abajo sobre por qué.
 function entryDocumentoDe(servicio: string): string {
   return path.join(SERVICES_ROOT, servicio, 'src', 'handler-documento.ts');
+}
+// entryGenerarDocumentoDe -- v1.78, Lambda disparado por EventBridge
+// (CierreDiaRegistrado) que genera y sube a S3 los PDFs de reporte de día --
+// mismo criterio de separar el entry que entryDocumentoDe de arriba (ver la
+// nota grande junto a `generarReporteDiaDocumento` más abajo).
+function entryGenerarDocumentoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-generar-documento.ts');
 }
 
 export interface ApiStackProps extends StackProps {
@@ -202,8 +212,10 @@ export class ApiStack extends Stack {
     // --- ingest-comprobante-pdf: PUT /comprobantes/{numeracion}/pdf -----------
     // Sube el PDF ya generado por fuelhub-facturador a S3 (spec pegado por
     // Jorge, ver specs-cierres-grifo-backend.md sección 3.8.9). A diferencia
-    // de ReportesDocumentosBucket (que es scratch, 1 día de vida, se
-    // regenera en cada request), este bucket es el almacenamiento REAL y
+    // de ReportesDocumentosBucket (que hasta v1.77 era scratch de 1 día de
+    // vida, regenerado en cada request -- desde v1.78 también persiste
+    // indefinidamente, ver la nota grande junto a su definición), este bucket
+    // es el almacenamiento REAL y
     // persistente de los comprobantes de un grifo: SIN autoDeleteObjects,
     // SIN lifecycleRules de expiración. RemovalPolicy por defecto es RETAIN
     // -- si el stack se destruye, estos documentos no se van con él.
@@ -404,29 +416,32 @@ export class ApiStack extends Stack {
 
     // --- consulta-reportes: GET /reportes/dia/documento (v1.60) ----------------
     // Variante de /reportes/dia que en vez de JSON devuelve una URL firmada
-    // de S3 a un PDF ya renderizado -- contrato acordado con Jorge para que
+    // de S3 a un PDF -- contrato acordado con Jorge para que
     // `notificaciones-whatsapp` lo mande directo como adjunto por WhatsApp
     // Cloud API (que pide la URL sin poder mandar headers custom, de ahí que
-    // sea una URL PRESIGNADA, no un endpoint autenticado). Lambda separado
-    // del resto de `consulta-reportes` (`fn` propio, no se pasa `fn:
-    // consultaReportesMargen.fn` como con margen/abastecimiento/dia): trae
-    // dependencias (pdfkit, @aws-sdk/client-s3, s3-request-presigner) y un
-    // timeout más largo que los otros 3 (generar PDF + subir a S3) que no
-    // tiene sentido cargarle a esos Lambdas más livianos.
+    // sea una URL PRESIGNADA, no un endpoint autenticado).
+    //
+    // v1.78 -- a pedido de Jorge, este Lambda deja de GENERAR el PDF (eso
+    // ahora lo hace `generarReporteDiaDocumento` más abajo, disparado por el
+    // evento `CierreDiaRegistrado` apenas se registra el cierre de día) y
+    // pasa a servir SOLO lectura desde S3 -- pierde por completo pdfkit y
+    // Aurora como dependencias (ver `handler-documento.ts`), Lambda más
+    // liviano y sin el timeout largo que necesitaba antes.
     //
     // Bucket dedicado, sin acceso público (BLOCK_ALL -- la URL firmada es lo
-    // que da acceso, no el bucket), con expiración de objetos a 1 día (cada
-    // PDF se regenera en cada request; no hace falta guardarlos más que eso)
-    // y RemovalPolicy.DESTROY + autoDeleteObjects: a diferencia de
-    // `notificaciones-bus` (recurso compartido y externo a este stack, ver
-    // la nota de arriba), este bucket es propio de este stack y su contenido
-    // es 100% regenerable -- no hay motivo para retenerlo si el stack se
-    // destruye.
+    // que da acceso, no el bucket). Ya NO tiene `lifecycleRules` de
+    // expiración (hasta v1.77 vivía 1 día porque el PDF se regeneraba en
+    // cada request y no hacía falta guardarlo más que eso) -- desde v1.78
+    // cada PDF se genera UNA VEZ con una key estable y se sirve tal cual
+    // indefinidamente, así que borrarlo a las 24h rompería cualquier
+    // consulta posterior. Sigue con RemovalPolicy.DESTROY + autoDeleteObjects
+    // (recurso propio de este stack, no compartido como `notificaciones-bus`)
+    // -- destruir el stack sigue destruyendo estos PDFs, son regenerables
+    // re-disparando `GenerarReporteDiaDocumento` a mano si hiciera falta.
     const reportesDocumentosBucket = new s3.Bucket(this, 'ReportesDocumentosBucket', {
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      lifecycleRules: [{ expiration: Duration.days(1) }],
     });
 
     const reportesDiaDocumento = reportesDia.addResource('documento');
@@ -455,12 +470,35 @@ export class ApiStack extends Stack {
       projectRoot: REPO_ROOT,
       depsLockFilePath: DEPS_LOCK_FILE_PATH,
       requiredScope: 'fuelhub-api/cierres.read',
+      environment: {
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+    });
+
+    reportesDocumentosBucket.grantRead(consultaReportesDiaDocumento.fn);
+
+    // --- generarReporteDiaDocumento: Lambda disparado por EventBridge (v1.78) --
+    // Genera y sube a S3 los 2 PDFs (individual + CONSOLIDADO) apenas se
+    // registra un cierre de día -- ver GenerarReporteDiaDocumento.ts y
+    // handler-generar-documento.ts. Distinto de todos los demás Lambdas de
+    // este archivo: no tiene ruta de API Gateway ni Cognito Authorizer (no
+    // se crea con `AuthenticatedEndpoint`, que asume un método HTTP), su
+    // trigger es la `events.Rule` de abajo. SÍ necesita pdfkit (con el mismo
+    // hook de `.afm` que este endpoint ya no necesita, ver arriba) y Aurora
+    // (para leer el cierre de día recién grabado + los turnos del día).
+    const generarReporteDiaDocumento = new NodejsFunction(this, 'GenerarReporteDiaDocumentoFn', {
+      entry: entryGenerarDocumentoDe('consulta-reportes'),
+      runtime: Runtime.NODEJS_22_X,
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
       timeout: Duration.seconds(20),
       environment: {
         ...AURORA_ENV,
         REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
       },
       bundling: {
+        minify: true,
+        sourceMap: true,
         commandHooks: {
           beforeBundling(): string[] {
             return [];
@@ -475,24 +513,40 @@ export class ApiStack extends Stack {
       },
     });
 
-    reportesDocumentosBucket.grantReadWrite(consultaReportesDiaDocumento.fn);
+    reportesDocumentosBucket.grantWrite(generarReporteDiaDocumento);
+    dataStack.cluster.grantDataApiAccess(generarReporteDiaDocumento);
+
+    // Regla de EventBridge: filtra el evento `CierreDiaRegistrado` (mismo
+    // `Source`/`DetailType` que ya publica `EventBridgeCierreDiaPublisher.ts`
+    // en ingest-cierre-dia, best effort) desde `notificacionesBus` hacia este
+    // Lambda. `addTarget` ya deja el permiso de invocación de EventBridge ->
+    // Lambda resuelto -- no hace falta un `fn.addPermission` a mano.
+    new events.Rule(this, 'CierreDiaRegistradoParaReporteDocumento', {
+      eventBus: notificacionesBus,
+      eventPattern: {
+        source: ['FuelHubCloud'],
+        detailType: ['CierreDiaRegistrado'],
+      },
+      targets: [new targets.LambdaFunction(generarReporteDiaDocumento)],
+    });
 
     // --- Grants IAM (sección 6.2, principio de mínimo privilegio) --------------
-    // 8 Lambdas reales en total (los 4 pares de arriba comparten `fn`; v1.60
-    // suma `consultaReportesDiaDocumento`, que SÍ es un Lambda propio -- no
-    // comparte `fn` con nadie, ver la nota grande de arriba). v1.66 agrega
-    // IngestCompraActualizar (PUT /compras/{id}), y v1.67 agrega
+    // v1.66 agrega IngestCompraActualizar (PUT /compras/{id}), y v1.67 agrega
     // IngestCompraListar/IngestCompraObtener (GET /compras, GET
     // /compras/{id}) -- las tres reusan `ingestCompra.fn`, ninguna suma un
     // Lambda nuevo a la lista de abajo. v1.69 agrega `ingestComprobantePdf`
     // (PUT /comprobantes/{numeracion}/pdf) -- deliberadamente AFUERA de este
     // loop: no toca Aurora, así que no necesita `grantDataApiAccess`. Su
     // único grant es `comprobantesPdfBucket.grantWrite(...)`, ya hecho junto
-    // a su definición más arriba (mismo criterio que
-    // `reportesDocumentosBucket.grantReadWrite(...)`). v1.72 agrega `consultaComprobante`
+    // a su definición más arriba. v1.72 agrega `consultaComprobante`
     // (GET /comprobantes/{numeracion}) con el mismo criterio -- tampoco toca
     // Aurora, su unico grant es `comprobantesPdfBucket.grantRead(...)`, ya
-    // hecho junto a su definicion mas arriba.
+    // hecho junto a su definicion mas arriba. v1.78 saca a
+    // `consultaReportesDiaDocumento` de este loop (dejó de tocar Aurora, ver
+    // la nota grande de arriba) y agrega `generarReporteDiaDocumento` --
+    // ese SÍ necesita `grantDataApiAccess`, pero se le da directo junto a su
+    // definición más arriba (no es un `AuthenticatedEndpoint`, no calza en
+    // este loop que itera `.fn` de ese Construct).
 
     for (const endpoint of [
       ingestCierreTurno,
@@ -502,7 +556,6 @@ export class ApiStack extends Stack {
       consultaCierreTurnoDetalle,
       adminTanquesListar, // cubre también AdminTanquesActualizar (mismo fn)
       consultaReportesMargen, // cubre también ConsultaReportesAbastecimiento y ConsultaReportesDia (mismo fn)
-      consultaReportesDiaDocumento, // v1.60 -- fn propio, ver nota de arriba
     ]) {
       dataStack.cluster.grantDataApiAccess(endpoint.fn);
     }

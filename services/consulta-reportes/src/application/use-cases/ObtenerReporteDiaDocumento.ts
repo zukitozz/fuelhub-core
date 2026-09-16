@@ -1,36 +1,47 @@
 // application/use-cases/ObtenerReporteDiaDocumento.ts
 //
-// Orquesta GET /v1/reportes/dia/documento (v1.60). Reusa exactamente la
-// misma resolución de autorización/estación que ObtenerReporteDia (sección
-// 5.4) para el caso de una sola estación -- la diferencia real está en qué
-// pasa cuando NO se manda estacionCodigo y el token no resuelve a una única
-// estación (multi-estación explícito, o wildcard '*'): en vez del 400 que
-// tira ObtenerReporteDia (ese endpoint no tiene forma de devolver un
-// agregado en su forma JSON de hoy), acá se arma el reporte CONSOLIDADO de
-// todas las estaciones a las que el token tiene acceso.
+// Orquesta GET /v1/reportes/dia/documento.
 //
-// El cliente M2M "fuelhub-notificaciones-whatsapp" (station.* wildcard,
-// v1.60 -- ver la nota grande en infra/lib/stacks/api-stack.ts) es hoy el
-// único App Client real que puede llegar al camino consolidado: es el único
-// sin una única estación en su station_scope.
+// v1.78 -- cambio de arquitectura a pedido de Jorge: este caso de uso deja
+// de CONSULTAR Postgres y RENDERIZAR el PDF (eso ahora pasa una sola vez,
+// al recibir el cierre de día -- ver `GenerarReporteDiaDocumento`) y pasa a
+// ser puramente "resolver qué key le corresponde a este request" + "pedirle
+// a S3 una URL firmada de esa key". Por eso el constructor pierde
+// `ReporteDiaQueryRepository`/`ReporteDiaRendererPort` -- solo queda
+// `DocumentoStoragePort`. Si la key no existe todavía en S3
+// (`DocumentoNoEncontradoError`), se traduce a `RecursoNoEncontradoError`
+// (404) -- decisión confirmada con Jorge: sin fallback a generar al vuelo
+// (eso reintroduciría el acoplamiento -- y las dependencias de pdfkit/RDS
+// Data API -- que este cambio busca sacar de este Lambda).
+//
+// Resolución de estación / consolidado, con un ajuste de seguridad nuevo
+// respecto a v1.60-v1.77 (ver el bloque `else` más abajo): antes, un token
+// multi-estación explícito (no wildcard) sin `estacionCodigo` recibía un
+// CONSOLIDADO armado en el momento, acotado a SU lista de estaciones
+// permitidas (`estacionesPermitidasDelToken`). Ahora el CONSOLIDADO es un
+// único PDF pre-generado con TODAS las estaciones activas del grupo
+// (`GenerarReporteDiaDocumento`) -- ya no hay forma de servir un recorte por
+// token sin volver a generar al vuelo. Dejarlo pasar igual filtraría datos
+// de estaciones fuera del alcance de ese token, así que ahora SOLO un token
+// wildcard (`*`) puede pedir el consolidado; cualquier otro token que no
+// resuelva a una única estación recibe 403. Hoy esto no cambia ningún
+// comportamiento real: el único App Client sin una única estación es
+// `fuelhub-notificaciones-whatsapp`, que ya es wildcard -- el caso
+// "multi-estación explícito, no wildcard" sigue siendo teórico (ningún
+// App Client real tiene más de un `station.<CODIGO>` en su scope, ver
+// también la nota equivalente de `consulta-cierres`).
 
 import {
   AccesoDenegadoEstacionError,
   estacionesPermitidasDelToken,
   estacionUnicaDelToken,
   hasAccessToStation,
-  ParametrosInvalidosError,
   RecursoNoEncontradoError,
   type AuthContext,
 } from '@fuelhub/shared-kernel';
 import { normalizarFechaNegocio } from '../../domain/value-objects/RangoFechas';
-import type { ReporteDiaQueryRepository } from '../ports/ReporteDiaQueryRepository';
-import type {
-  DocumentoStoragePort,
-  DocumentoSubidoDTO,
-  ReporteDiaEstacionDocumentoDTO,
-  ReporteDiaRendererPort,
-} from '../ports/ReporteDiaDocumentoPorts';
+import { construirKeyDocumentoConsolidado, construirKeyDocumentoEstacion } from '../../domain/DocumentoReporteKey';
+import { DocumentoNoEncontradoError, type DocumentoStoragePort, type DocumentoSubidoDTO } from '../ports/ReporteDiaDocumentoPorts';
 
 export interface ObtenerReporteDiaDocumentoQuery {
   readonly estacionCodigo?: string;
@@ -41,89 +52,39 @@ export interface ReporteDiaDocumentoDTO extends DocumentoSubidoDTO {
   readonly tipo: 'application/pdf';
 }
 
-const EXPIRACION_SEGUNDOS = 600; // 10 min -- notificaciones-whatsapp consume la URL de inmediato al recibirla (contrato acordado con Jorge, v1.60).
-const CONTENT_TYPE = 'application/pdf';
+const EXPIRACION_SEGUNDOS = 600; // 10 min -- notificaciones-whatsapp consume la URL de inmediato al recibirla (contrato acordado con Jorge, v1.60). Sin cambios en v1.78.
+const NOMBRE_RECURSO = 'Reporte de día (documento)';
 
 export class ObtenerReporteDiaDocumento {
-  constructor(
-    private readonly repo: ReporteDiaQueryRepository,
-    private readonly renderer: ReporteDiaRendererPort,
-    private readonly storage: DocumentoStoragePort
-  ) {}
+  constructor(private readonly storage: DocumentoStoragePort) {}
 
   async ejecutar(auth: AuthContext, query: ObtenerReporteDiaDocumentoQuery): Promise<ReporteDiaDocumentoDTO> {
     const fechaNegocio = normalizarFechaNegocio(query.fechaNegocio);
     const estacionCodigo = query.estacionCodigo ?? estacionUnicaDelToken(auth);
 
-    let buffer: Buffer;
     let key: string;
-
     if (estacionCodigo !== undefined) {
-      // Mismo camino que ObtenerReporteDia (individual): 403 explícito si el
-      // token no tiene acceso a esa estación puntual, sea porque vino en el
-      // query param o porque resolvió sola del token.
       if (!hasAccessToStation(auth, estacionCodigo)) {
         throw new AccesoDenegadoEstacionError(estacionCodigo);
       }
-      const reporte = await this.repo.obtener({ estacionCodigo, fechaNegocio });
-      if (reporte === null) {
-        throw new RecursoNoEncontradoError('Cierre de día', `${estacionCodigo} / ${fechaNegocio}`);
-      }
-      const turnos = await this.repo.listarTurnos(reporte.cierreDiaId);
-      buffer = await this.renderer.renderizarPdf({ modo: 'individual', estacion: { reporte, turnos } });
-      key = `reportes-dia/${fechaNegocio}/${estacionCodigo}-${Date.now()}.pdf`;
+      key = construirKeyDocumentoEstacion(estacionCodigo, fechaNegocio);
     } else {
-      // Sin estacionCodigo y el token no resuelve a una única estación: solo
-      // llega acá un token multi-estación o wildcard ('*') -- si fuera de una
-      // sola estación, estacionUnicaDelToken ya la hubiera devuelto arriba.
-      const codigos = await this.resolverCodigosConsolidado(auth);
-      const estaciones = await this.obtenerEstacionesDeCodigos(codigos, fechaNegocio);
-      if (estaciones.length === 0) {
-        throw new RecursoNoEncontradoError('Cierre de día', `(consolidado) / ${fechaNegocio}`);
+      // Sin estacionCodigo y el token no resuelve a una única estación -- ver
+      // la nota grande de cabecera sobre por qué solo wildcard puede pasar acá.
+      if (estacionesPermitidasDelToken(auth) !== '*') {
+        throw new AccesoDenegadoEstacionError('CONSOLIDADO');
       }
-      buffer = await this.renderer.renderizarPdf({ modo: 'consolidado', fechaNegocio, estaciones });
-      key = `reportes-dia/${fechaNegocio}/consolidado-${Date.now()}.pdf`;
+      key = construirKeyDocumentoConsolidado(fechaNegocio);
     }
 
-    const subido = await this.storage.subirYFirmar({
-      buffer,
-      key,
-      contentType: CONTENT_TYPE,
-      expiraEnSegundos: EXPIRACION_SEGUNDOS,
-    });
-
-    return { ...subido, tipo: 'application/pdf' };
-  }
-
-  private async resolverCodigosConsolidado(auth: AuthContext): Promise<readonly string[]> {
-    const permitidos = estacionesPermitidasDelToken(auth);
-    if (permitidos === '*') {
-      return this.repo.listarCodigosEstacionesActivas();
+    try {
+      const subido = await this.storage.obtenerUrlFirmada({ key, expiraEnSegundos: EXPIRACION_SEGUNDOS });
+      return { ...subido, tipo: 'application/pdf' };
+    } catch (err) {
+      if (err instanceof DocumentoNoEncontradoError) {
+        throw new RecursoNoEncontradoError(NOMBRE_RECURSO, `${estacionCodigo ?? 'CONSOLIDADO'} / ${fechaNegocio}`);
+      }
+      throw err;
     }
-    if (permitidos.length === 0) {
-      // Token sin ningún código de estación en su scope -- no debería poder
-      // pasar el Pre Token Generation Lambda (9.2.2, siempre exige al menos
-      // un scope station.*), pero se deja el chequeo explícito en vez de
-      // devolver un consolidado vacío en silencio.
-      throw new ParametrosInvalidosError('El token no tiene ninguna estación asociada.', [
-        { field: 'estacionCodigo', issue: 'requerido -- el token no resuelve a ninguna estación' },
-      ]);
-    }
-    return permitidos;
-  }
-
-  // Igual que en el caso individual: el desglose por turno solo se pide
-  // para estaciones que sí tuvieron cierre ese día (evita queries de más
-  // para estaciones sin actividad, en el caso consolidado -- v1.62).
-  private async obtenerEstacionesDeCodigos(codigos: readonly string[], fechaNegocio: string): Promise<ReporteDiaEstacionDocumentoDTO[]> {
-    const reportes = await Promise.all(
-      codigos.map(async (estacionCodigo): Promise<ReporteDiaEstacionDocumentoDTO | null> => {
-        const reporte = await this.repo.obtener({ estacionCodigo, fechaNegocio });
-        if (reporte === null) return null;
-        const turnos = await this.repo.listarTurnos(reporte.cierreDiaId);
-        return { reporte, turnos };
-      })
-    );
-    return reportes.filter((r): r is ReporteDiaEstacionDocumentoDTO => r !== null);
   }
 }

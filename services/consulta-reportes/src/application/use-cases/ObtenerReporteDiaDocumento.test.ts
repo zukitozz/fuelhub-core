@@ -1,199 +1,111 @@
-// ObtenerReporteDiaDocumento.test.ts (v1.62)
+// ObtenerReporteDiaDocumento.test.ts (v1.78)
 //
-// Cubre dos cosas: (1) la rama que no tiene ObtenerReporteDia -- cuando no
-// se manda estacionCodigo y el token no resuelve a una única estación, en
-// vez de un 400 se arma el reporte CONSOLIDADO (todas las estaciones del
-// token); y (2) desde v1.62, que el PDF (individual y consolidado) siempre
-// se arma con el desglose por turno (`listarTurnos`) además del reporte del
-// día -- a pedido de Jorge ("apóyate de los cierres de turno que
-// corresponden al cierre de día"). Se prueba sin AWS real: repo/renderer/
-// storage son fakes en memoria -- mismo criterio que ObtenerReporteDia.test.ts.
+// Desde v1.78 este caso de uso ya no toca Postgres/pdfkit -- solo resuelve
+// la key de S3 (estación explícita/única del token, o CONSOLIDADO para un
+// token wildcard) y le pide a `DocumentoStoragePort` la URL firmada. Se
+// prueba con un storage fake en memoria -- mismo criterio que el resto del
+// repo (ver GenerarReporteDiaDocumento.test.ts para la lógica de generación
+// que este caso de uso ya no tiene).
 
-import { AccesoDenegadoEstacionError, RecursoNoEncontradoError, type AuthContext } from '@fuelhub/shared-kernel';
+import { AccesoDenegadoEstacionError, ParametrosInvalidosError, RecursoNoEncontradoError, type AuthContext } from '@fuelhub/shared-kernel';
 import { ObtenerReporteDiaDocumento } from './ObtenerReporteDiaDocumento';
-import type { FiltrosReporteDia, ReporteDiaDTO, ReporteDiaQueryRepository, ReporteDiaTurnoDTO } from '../ports/ReporteDiaQueryRepository';
-import type {
-  DocumentoStoragePort,
-  ReporteDiaDocumentoDatos,
-  ReporteDiaEstacionDocumentoDTO,
-  ReporteDiaRendererPort,
-} from '../ports/ReporteDiaDocumentoPorts';
+import { DocumentoNoEncontradoError, type DocumentoStoragePort } from '../ports/ReporteDiaDocumentoPorts';
 
 function auth(overrides: Partial<AuthContext> = {}): AuthContext {
   return { clientId: 'test-client', role: 'SISTEMA_GRIFO', stationScope: 'CHANCAYLLO', scopes: [], ...overrides };
 }
 
-function cierreDiaIdDe(estacionCodigo: string): string {
-  return `cierre-dia-${estacionCodigo}`;
-}
-
-function reporteDe(estacionCodigo: string): ReporteDiaDTO {
-  return {
-    estacionCodigo,
-    fechaNegocio: '2026-08-22',
-    cierreDiaId: cierreDiaIdDe(estacionCodigo),
-    total: 1000,
-    totalCombustible: 900,
-    totalNoCombustible: 100,
-    totalSinClasificar: 0,
-    productos: [],
-  };
-}
-
-function turnosDe(estacionCodigo: string): ReporteDiaTurnoDTO[] {
-  return [
-    {
-      cierreTurnoId: `${estacionCodigo}-t1`,
-      turno: 'TURNO1',
-      empleado: 'Juan Pérez',
-      fechaInicio: '2026-08-22T06:00:00.000Z',
-      fecha: '2026-08-22T14:00:00.000Z',
-      total: 400,
-      productos: [],
-    },
-  ];
-}
-
-function estacionDe(estacionCodigo: string): ReporteDiaEstacionDocumentoDTO {
-  return { reporte: reporteDe(estacionCodigo), turnos: turnosDe(estacionCodigo) };
-}
-
-class RepoFake implements ReporteDiaQueryRepository {
-  public llamadasObtener: unknown[] = [];
-  public llamadasListarTurnos: string[] = [];
-  public llamoListarActivas = false;
-  constructor(
-    private readonly reportesPorEstacion: Record<string, ReporteDiaDTO | null>,
-    private readonly codigosActivos: string[] = [],
-    private readonly turnosPorEstacion: Record<string, ReporteDiaTurnoDTO[]> = {}
-  ) {}
-
-  async obtener(filtros: FiltrosReporteDia): Promise<ReporteDiaDTO | null> {
-    this.llamadasObtener.push(filtros);
-    return this.reportesPorEstacion[filtros.estacionCodigo] ?? null;
-  }
-
-  async listarCodigosEstacionesActivas(): Promise<string[]> {
-    this.llamoListarActivas = true;
-    return this.codigosActivos;
-  }
-
-  async listarTurnos(cierreDiaId: string): Promise<ReporteDiaTurnoDTO[]> {
-    this.llamadasListarTurnos.push(cierreDiaId);
-    const estacionCodigo = cierreDiaId.replace(/^cierre-dia-/, '');
-    return this.turnosPorEstacion[estacionCodigo] ?? turnosDe(estacionCodigo);
-  }
-}
-
-class RendererFake implements ReporteDiaRendererPort {
-  public ultimosDatos: ReporteDiaDocumentoDatos | undefined;
-  async renderizarPdf(datos: ReporteDiaDocumentoDatos): Promise<Buffer> {
-    this.ultimosDatos = datos;
-    return Buffer.from('pdf-fake');
-  }
-}
-
 class StorageFake implements DocumentoStoragePort {
-  public ultimoKey: string | undefined;
-  async subirYFirmar(params: { buffer: Buffer; key: string; contentType: string; expiraEnSegundos: number }) {
-    this.ultimoKey = params.key;
+  public llamadas: { key: string; expiraEnSegundos: number }[] = [];
+  constructor(private readonly keysExistentes: Set<string> = new Set()) {}
+
+  async subir(): Promise<void> {
+    throw new Error('no usado en este caso de uso');
+  }
+
+  async obtenerUrlFirmada(params: { key: string; expiraEnSegundos: number }) {
+    this.llamadas.push(params);
+    if (!this.keysExistentes.has(params.key)) {
+      throw new DocumentoNoEncontradoError(params.key);
+    }
     return { url: `https://s3.fake/${params.key}`, expiraEn: params.expiraEnSegundos };
   }
 }
 
 describe('ObtenerReporteDiaDocumento', () => {
-  it('individual: usa estacionCodigo explícito, arma el PDF de una sola estación con su desglose por turno', async () => {
-    const repo = new RepoFake({ CHANCAYLLO: reporteDe('CHANCAYLLO') });
-    const renderer = new RendererFake();
-    const storage = new StorageFake();
-    const caso = new ObtenerReporteDiaDocumento(repo, renderer, storage);
+  it('individual: usa estacionCodigo explícito y resuelve la key estable {ESTACION}-{fecha}.pdf', async () => {
+    const storage = new StorageFake(new Set(['reportes-dia/CHANCAYLLO-20260916.pdf']));
+    const caso = new ObtenerReporteDiaDocumento(storage);
 
     const resultado = await caso.ejecutar(auth({ stationScope: '*' }), {
       estacionCodigo: 'CHANCAYLLO',
-      fechaNegocio: '2026-08-22',
+      fechaNegocio: '2026-09-16',
     });
 
-    expect(resultado).toEqual({ url: expect.stringContaining('CHANCAYLLO'), tipo: 'application/pdf', expiraEn: 600 });
-    expect(renderer.ultimosDatos).toEqual({ modo: 'individual', estacion: estacionDe('CHANCAYLLO') });
-    expect(repo.llamadasListarTurnos).toEqual([cierreDiaIdDe('CHANCAYLLO')]);
-    expect(repo.llamoListarActivas).toBe(false);
+    expect(resultado).toEqual({ url: expect.stringContaining('CHANCAYLLO-20260916'), tipo: 'application/pdf', expiraEn: 600 });
   });
 
   it('individual: usa la estación única del token cuando no se manda estacionCodigo', async () => {
-    const repo = new RepoFake({ CHANCAYLLO: reporteDe('CHANCAYLLO') });
-    const caso = new ObtenerReporteDiaDocumento(repo, new RendererFake(), new StorageFake());
+    const storage = new StorageFake(new Set(['reportes-dia/CHANCAYLLO-20260916.pdf']));
+    const caso = new ObtenerReporteDiaDocumento(storage);
 
-    const resultado = await caso.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), { fechaNegocio: '2026-08-22' });
+    const resultado = await caso.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), { fechaNegocio: '2026-09-16' });
 
     expect(resultado.tipo).toBe('application/pdf');
-    expect(repo.llamadasObtener).toEqual([{ estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-08-22' }]);
-    expect(repo.llamadasListarTurnos).toEqual([cierreDiaIdDe('CHANCAYLLO')]);
+    expect(storage.llamadas).toEqual([{ key: 'reportes-dia/CHANCAYLLO-20260916.pdf', expiraEnSegundos: 600 }]);
   });
 
   it('individual: 403 si el token no tiene acceso a la estación pedida', async () => {
-    const repo = new RepoFake({ MALA: reporteDe('MALA') });
-    const caso = new ObtenerReporteDiaDocumento(repo, new RendererFake(), new StorageFake());
-
-    await expect(
-      caso.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), { estacionCodigo: 'MALA', fechaNegocio: '2026-08-22' })
-    ).rejects.toThrow(AccesoDenegadoEstacionError);
-    expect(repo.llamadasListarTurnos).toEqual([]);
-  });
-
-  it('individual: 404 si no hay cierre de día ACTIVO para esa estación/fecha (no llega a pedir los turnos)', async () => {
-    const repo = new RepoFake({});
-    const caso = new ObtenerReporteDiaDocumento(repo, new RendererFake(), new StorageFake());
-
-    await expect(
-      caso.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), { estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-08-22' })
-    ).rejects.toThrow(RecursoNoEncontradoError);
-    expect(repo.llamadasListarTurnos).toEqual([]);
-  });
-
-  it('consolidado: token wildcard sin estacionCodigo arma el PDF de todas las estaciones activas, cada una con su desglose por turno', async () => {
-    const repo = new RepoFake(
-      { CHANCAYLLO: reporteDe('CHANCAYLLO'), MALA: reporteDe('MALA'), ANDAHUASI: null },
-      ['ANDAHUASI', 'CHANCAYLLO', 'MALA']
-    );
-    const renderer = new RendererFake();
     const storage = new StorageFake();
-    const caso = new ObtenerReporteDiaDocumento(repo, renderer, storage);
+    const caso = new ObtenerReporteDiaDocumento(storage);
 
-    const resultado = await caso.ejecutar(auth({ stationScope: '*' }), { fechaNegocio: '2026-08-22' });
+    await expect(
+      caso.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), { estacionCodigo: 'MALA', fechaNegocio: '2026-09-16' })
+    ).rejects.toThrow(AccesoDenegadoEstacionError);
+    expect(storage.llamadas).toEqual([]);
+  });
+
+  it('individual: 404 si la key todavía no existe en S3 (sin fallback a generar al vuelo)', async () => {
+    const storage = new StorageFake();
+    const caso = new ObtenerReporteDiaDocumento(storage);
+
+    await expect(
+      caso.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), { estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-09-16' })
+    ).rejects.toThrow(RecursoNoEncontradoError);
+  });
+
+  it('consolidado: token wildcard sin estacionCodigo resuelve la key CONSOLIDADO-{fecha}.pdf', async () => {
+    const storage = new StorageFake(new Set(['reportes-dia/CONSOLIDADO-20260916.pdf']));
+    const caso = new ObtenerReporteDiaDocumento(storage);
+
+    const resultado = await caso.ejecutar(auth({ stationScope: '*' }), { fechaNegocio: '2026-09-16' });
 
     expect(resultado.tipo).toBe('application/pdf');
-    expect(repo.llamoListarActivas).toBe(true);
-    // ANDAHUASI no tenía cierre ese día -- se omite del consolidado, y por
-    // eso tampoco se le pide el desglose por turno (evita una query de más).
-    expect(renderer.ultimosDatos).toEqual({
-      modo: 'consolidado',
-      fechaNegocio: '2026-08-22',
-      estaciones: [estacionDe('CHANCAYLLO'), estacionDe('MALA')],
-    });
-    expect(repo.llamadasListarTurnos.sort()).toEqual([cierreDiaIdDe('CHANCAYLLO'), cierreDiaIdDe('MALA')].sort());
-    expect(storage.ultimoKey).toContain('consolidado');
+    expect(storage.llamadas).toEqual([{ key: 'reportes-dia/CONSOLIDADO-20260916.pdf', expiraEnSegundos: 600 }]);
   });
 
-  it('consolidado: token multi-estación explícito (no wildcard) usa esa lista sin consultar todas las activas', async () => {
-    const repo = new RepoFake({ CHANCAYLLO: reporteDe('CHANCAYLLO'), MALA: reporteDe('MALA') }, ['ANDAHUASI', 'CHANCAYLLO', 'MALA']);
-    const renderer = new RendererFake();
-    const caso = new ObtenerReporteDiaDocumento(repo, renderer, new StorageFake());
+  it('consolidado: 404 si el CONSOLIDADO de esa fecha todavía no existe en S3', async () => {
+    const storage = new StorageFake();
+    const caso = new ObtenerReporteDiaDocumento(storage);
 
-    await caso.ejecutar(auth({ stationScope: 'CHANCAYLLO,MALA' }), { fechaNegocio: '2026-08-22' });
-
-    // No debe filtrar por ANDAHUASI -- el token no lo tenía en su lista, aunque esté "activa".
-    expect(repo.llamoListarActivas).toBe(false);
-    expect(renderer.ultimosDatos).toEqual({
-      modo: 'consolidado',
-      fechaNegocio: '2026-08-22',
-      estaciones: [estacionDe('CHANCAYLLO'), estacionDe('MALA')],
-    });
+    await expect(caso.ejecutar(auth({ stationScope: '*' }), { fechaNegocio: '2026-09-16' })).rejects.toThrow(RecursoNoEncontradoError);
   });
 
-  it('consolidado: 404 si ninguna estación del token tiene cierre ese día', async () => {
-    const repo = new RepoFake({}, []);
-    const caso = new ObtenerReporteDiaDocumento(repo, new RendererFake(), new StorageFake());
+  it('consolidado: 403 para un token multi-estación explícito (no wildcard) -- v1.78, ya no se sirve un recorte por token', async () => {
+    const storage = new StorageFake(new Set(['reportes-dia/CONSOLIDADO-20260916.pdf']));
+    const caso = new ObtenerReporteDiaDocumento(storage);
 
-    await expect(caso.ejecutar(auth({ stationScope: '*' }), { fechaNegocio: '2026-08-22' })).rejects.toThrow(RecursoNoEncontradoError);
+    await expect(
+      caso.ejecutar(auth({ stationScope: 'CHANCAYLLO,MALA' }), { fechaNegocio: '2026-09-16' })
+    ).rejects.toThrow(AccesoDenegadoEstacionError);
+    expect(storage.llamadas).toEqual([]);
+  });
+
+  it('rechaza fechaNegocio ausente o inválida antes de tocar el storage', async () => {
+    const storage = new StorageFake();
+    const caso = new ObtenerReporteDiaDocumento(storage);
+
+    await expect(caso.ejecutar(auth(), { estacionCodigo: 'CHANCAYLLO' })).rejects.toThrow(ParametrosInvalidosError);
+    expect(storage.llamadas).toEqual([]);
   });
 });
