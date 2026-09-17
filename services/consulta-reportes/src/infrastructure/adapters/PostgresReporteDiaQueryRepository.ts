@@ -139,6 +139,18 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
   // `fecha_negocio` -- ya no hace falta el JOIN a `estaciones` ni el CAST de
   // fecha acá, `cierre_dia_id` ya acota estación y día sin ambigüedad (ver
   // el hallazgo documentado arriba del archivo).
+  //
+  // v1.79: la cabecera se ordena por `ct.turno` (antes solo por
+  // `fecha_inicio`) a pedido de Jorge -- el reporte debe listar todos los
+  // TURNO1 antes que los TURNO2 y estos antes que los TURNO3, sin importar
+  // la hora real de inicio. `turno` es el tipo nativo `turno_enum`
+  // (`CREATE TYPE turno_enum AS ENUM ('TURNO1', 'TURNO2', 'TURNO3')`, ver
+  // `1787900000000_esquema-inicial.sql`) -- Postgres ordena un enum por su
+  // posición de declaración, no alfabéticamente, así que un `ORDER BY`
+  // simple ya alcanza (no hace falta un `CASE WHEN` manual). Se deja
+  // `fecha_inicio ASC` como segundo criterio, solo como desempate
+  // determinístico si alguna vez hay más de un turno activo con el mismo
+  // valor de `turno` para el mismo `cierre_dia_id`.
   async listarTurnos(cierreDiaId: string): Promise<ReporteDiaTurnoDTO[]> {
     const parametros: SqlParameter[] = [{ name: 'cierreDiaId', value: { stringValue: cierreDiaId } }];
 
@@ -151,7 +163,7 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
           LEFT JOIN usuarios u   ON u.id = ct.usuario_id
           WHERE ct.cierre_dia_id = CAST(:cierreDiaId AS uuid)
             AND ct.estado = 'ACTIVO'
-          ORDER BY ct.fecha_inicio ASC
+          ORDER BY ct.turno ASC, ct.fecha_inicio ASC
         `,
         parametros
       ),
