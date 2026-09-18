@@ -17,6 +17,7 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -528,6 +529,52 @@ export class ApiStack extends Stack {
         detailType: ['CierreDiaRegistrado'],
       },
       targets: [new targets.LambdaFunction(generarReporteDiaDocumento)],
+    });
+
+    // --- ingestCompraCorreo: Lambda por cron (v1.81, sin ruta de API) ----------
+    // Lee facturas de proveedores de un buzón de Gmail (etiqueta
+    // "FuelHub/Proveedores", creada a mano por Jorge) y registra la compra
+    // sola -- ver ProcesarFacturaProveedorCorreo.ts (ingest-compra-correo).
+    // Mismo criterio que generarReporteDiaDocumento arriba: no es un
+    // AuthenticatedEndpoint (no tiene ruta HTTP), su trigger es un
+    // events.Rule -- acá con `schedule` (EventBridge Scheduler / cron) en
+    // vez de un eventPattern de negocio.
+    //
+    // El secreto con las credenciales de Gmail (clientId/clientSecret/
+    // refreshToken) lo crea Jorge corriendo `scripts/gmail-oauth-setup.mjs`
+    // en su máquina (nunca pasa por este repo/CDK) -- acá solo se IMPORTA
+    // por nombre (mismo patrón `fuelhubcore/<grupo>/<ambiente>/<nombre>`
+    // que ya usa `resolver-outputs-datastack.mjs` para otros recursos por
+    // grupo/ambiente) y se le da permiso de lectura al Lambda.
+    const gmailProveedoresSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GmailProveedoresSecret',
+      `fuelhubcore/${props.grupoId}/${props.ambiente}/gmail-proveedores`
+    );
+
+    const ingestCompraCorreo = new NodejsFunction(this, 'IngestCompraCorreoFn', {
+      entry: entryDe('ingest-compra-correo'),
+      runtime: Runtime.NODEJS_22_X,
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      timeout: Duration.seconds(60),
+      environment: {
+        ...AURORA_ENV,
+        GMAIL_CREDENTIALS_SECRET_ARN: gmailProveedoresSecret.secretArn,
+      },
+    });
+
+    dataStack.cluster.grantDataApiAccess(ingestCompraCorreo);
+    gmailProveedoresSecret.grantRead(ingestCompraCorreo);
+
+    // Cada 30 minutos -- suficiente para una capacidad que reemplaza
+    // digitación manual (no hay urgencia de segundos/minutos como sí la
+    // tendría, por ejemplo, alertar sobre un cierre). Jorge puede ajustar
+    // este intervalo después sin tocar código -- es un simple cambio de
+    // `Duration` acá.
+    new events.Rule(this, 'IngestCompraCorreoSchedule', {
+      schedule: events.Schedule.rate(Duration.minutes(30)),
+      targets: [new targets.LambdaFunction(ingestCompraCorreo)],
     });
 
     // --- Grants IAM (sección 6.2, principio de mínimo privilegio) --------------
