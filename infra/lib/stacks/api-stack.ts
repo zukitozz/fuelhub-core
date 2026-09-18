@@ -570,15 +570,29 @@ export class ApiStack extends Stack {
     // Cada 30 minutos en prod -- suficiente para una capacidad que
     // reemplaza digitación manual (no hay urgencia de segundos/minutos como
     // sí la tendría, por ejemplo, alertar sobre un cierre). En dev, cada 3
-    // minutos -- pedido explícito de Jorge para poder probar el flujo
-    // completo (etiquetar un correo -> ver la compra aparecer) sin esperar
-    // media hora por vuelta. Bajar esto más (EventBridge admite hasta 1
-    // minuto) no tiene sentido: Gmail no entrega más rápido que eso y solo
-    // gastaría invocaciones de más.
+    // minutos cuando está prendido -- pedido explícito de Jorge para poder
+    // probar el flujo completo (etiquetar un correo -> ver la compra
+    // aparecer) sin esperar media hora por vuelta.
+    //
+    // `cronCorreoHabilitadoEnDev = false` -- APAGADO por defecto (pedido
+    // explícito de Jorge, v1.81, tras la primera prueba end-to-end
+    // exitosa). Dos motivos: (1) con un cron cada 3 minutos, Aurora dev
+    // (modo scale-to-zero, sección 2.5/18) nunca llega a apagarse -- queda
+    // encendida 24h al piso mínimo, que es la parte más cara de la factura
+    // de AWS según la sección 10; (2) dev y prod leen el MISMO buzón real
+    // de Gmail (un solo buzón compartido para todo el grupo, no uno por
+    // ambiente) -- con ambos crones activos compiten por el mismo correo,
+    // y el que gane la carrera puede terminar registrando una factura real
+    // en la base de dev en vez de la de prod. Para una próxima sesión de
+    // pruebas: cambiar esta constante a `true`, hacer push, probar, y
+    // volver a ponerla en `false` al terminar.
+    const cronCorreoHabilitadoEnDev = false;
+
     new events.Rule(this, 'IngestCompraCorreoSchedule', {
       schedule: events.Schedule.rate(
         Duration.minutes(props.ambiente === 'prod' ? 30 : 3)
       ),
+      enabled: props.ambiente === 'prod' || cronCorreoHabilitadoEnDev,
       targets: [new targets.LambdaFunction(ingestCompraCorreo)],
     });
 
