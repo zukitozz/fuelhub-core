@@ -24,6 +24,7 @@
     "services/ingest-cierre-turno/src/**/*.ts",
     "services/ingest-cierre-dia/src/**/*.ts",
     "services/ingest-compra/src/**/*.ts",
+    "services/ingest-compra-correo/src/**/*.ts",
     "services/admin-tanques/src/**/*.ts",
     "services/consulta-reportes/src/**/*.ts",
     "services/ingest-comprobante-pdf/src/**/*.ts",
