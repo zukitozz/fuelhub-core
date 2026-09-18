@@ -555,7 +555,7 @@ components:
           nullable: true
         estado:
           type: string
-          enum: [ACTIVO, ANULADO]
+          enum: [ACTIVO, ANULADO, PENDIENTE_REVISION]
         creadoEn:
           type: string
           format: date-time
@@ -606,7 +606,7 @@ components:
             compra no trajo `destinos` (p. ej. mercadería sin tanque).
         estado:
           type: string
-          enum: [ACTIVO, ANULADO]
+          enum: [ACTIVO, ANULADO, PENDIENTE_REVISION]
           description: >
             v1.66 -- por defecto `ACTIVO` al crear. `PUT /compras/{id}` es el
             único endpoint del contrato que hoy transiciona ACTIVO -> ANULADO
@@ -1179,7 +1179,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [ACTIVO, ANULADO]
+            enum: [ACTIVO, ANULADO, PENDIENTE_REVISION]
             default: ACTIVO
         - name: productoId
           in: query

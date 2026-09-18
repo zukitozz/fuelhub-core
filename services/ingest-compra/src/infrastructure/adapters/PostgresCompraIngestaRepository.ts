@@ -97,7 +97,7 @@ import {
   RollbackTransactionCommand,
   type SqlParameter,
 } from '@aws-sdk/client-rds-data';
-import { ParametrosInvalidosError, RecursoNoEncontradoError, conReintentoSiDbEstaResumiendo, type CategoriaProducto, type EstadoCierre } from '@fuelhub/shared-kernel';
+import { ParametrosInvalidosError, RecursoNoEncontradoError, conReintentoSiDbEstaResumiendo, type CategoriaProducto, type EstadoCompra } from '@fuelhub/shared-kernel';
 import type {
   CambiosCompra,
   CompraDestinoDTO,
@@ -133,7 +133,7 @@ interface FilaCompra {
   readonly costoUnitario: number;
   readonly costoTotal: number;
   readonly numeroGuia: string | null;
-  readonly estado: EstadoCierre;
+  readonly estado: EstadoCompra;
   readonly creadoEn: string;
 }
 
@@ -606,7 +606,7 @@ function mapearFilaCompra(fila: Record<string, unknown>): FilaCompra {
     costoUnitario: Number(fila.costo_unitario),
     costoTotal: Number(fila.costo_total),
     numeroGuia: fila.numero_guia === null || fila.numero_guia === undefined ? null : String(fila.numero_guia),
-    estado: fila.estado as EstadoCierre,
+    estado: fila.estado as EstadoCompra,
     creadoEn: String(fila.creado_en),
   };
 }
@@ -729,7 +729,7 @@ function mapearFilaResumen(fila: Record<string, unknown>): CompraResumenDTO {
     costoTotal: Number(fila.costo_total),
     numeroGuia: fila.numero_guia === null || fila.numero_guia === undefined ? null : String(fila.numero_guia),
     merma: filasDestino === 0 ? null : cantidad - cantidadRepartida,
-    estado: fila.estado as EstadoCierre,
+    estado: fila.estado as EstadoCompra,
     creadoEn: String(fila.creado_en),
   };
 }

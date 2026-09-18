@@ -11,6 +11,8 @@
 
 export type Turno = 'TURNO1' | 'TURNO2' | 'TURNO3';
 export type EstadoCierre = 'ACTIVO' | 'ANULADO';
+/** Espejo del ENUM Postgres `estado_compra` (migración 1788600000000, v1.80) -- NO es EstadoCierre: `compras` dejó de compartir ese tipo con cierres_dia/cierres_turno porque solo compras puede nacer PENDIENTE_REVISION (lectura de facturas por correo, v1.81). */
+export type EstadoCompra = 'ACTIVO' | 'ANULADO' | 'PENDIENTE_REVISION';
 /** Espejo del ENUM Postgres `categoria_producto` (sección 3.3, v1.58) — ver DetalleLinea.categoria. */
 export type CategoriaProducto = 'COMBUSTIBLE' | 'NO_COMBUSTIBLE';
 

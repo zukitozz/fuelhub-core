@@ -87,6 +87,15 @@ describe('ListarCompras', () => {
     await expect(useCase.ejecutar(auth(), { estado: 'BORRADO' })).rejects.toThrow(ParametrosInvalidosError);
   });
 
+  it('acepta PENDIENTE_REVISION -- v1.81, lo que el Lambda de correo deja para que Jorge revise', async () => {
+    const repo = new RepoFake();
+    const useCase = new ListarCompras(repo);
+
+    await useCase.ejecutar(auth(), { estado: 'PENDIENTE_REVISION' });
+
+    expect(repo.filtrosRecibidos?.estado).toBe('PENDIENTE_REVISION');
+  });
+
   it('rechaza con 400 una categoria inválida', async () => {
     const repo = new RepoFake();
     const useCase = new ListarCompras(repo);

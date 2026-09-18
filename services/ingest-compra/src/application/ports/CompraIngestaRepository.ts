@@ -52,7 +52,7 @@
 // /compras/{id}`, que reusa el `obtenerPorId` de arriba, ya existente desde
 // v1.66 para el flujo interno de `actualizar`).
 
-import type { CategoriaProducto, EstadoCierre } from '@fuelhub/shared-kernel';
+import type { CategoriaProducto, EstadoCierre, EstadoCompra } from '@fuelhub/shared-kernel';
 import type { ParametrosPaginacion, ResultadoPaginado } from '../../domain/value-objects/Paginacion';
 
 export interface CompraDestinoDTO {
@@ -80,7 +80,7 @@ export interface CompraOutputDTO {
   /** `cantidad - suma(destinos[].cantidad)` -- `null` si no hay ningún destino registrado (v1.66). */
   readonly merma: number | null;
   /** v1.66 -- `ANULADO` excluye la compra de reportes/stock (margen, abastecimiento). */
-  readonly estado: EstadoCierre;
+  readonly estado: EstadoCompra;
   readonly creadoEn: string;
 }
 
@@ -103,7 +103,7 @@ export interface CompraResumenDTO {
   readonly costoTotal: number;
   readonly numeroGuia: string | null;
   readonly merma: number | null;
-  readonly estado: EstadoCierre;
+  readonly estado: EstadoCompra;
   readonly creadoEn: string;
 }
 
@@ -112,7 +112,7 @@ export interface FiltrosCompra {
   readonly estacionCodigo?: string;
   readonly fechaDesde?: string; // YYYY-MM-DD, sobre compras.fecha
   readonly fechaHasta?: string;
-  readonly estado: EstadoCierre;
+  readonly estado: EstadoCompra;
   readonly productoId?: string;
   readonly categoria?: CategoriaProducto;
 }

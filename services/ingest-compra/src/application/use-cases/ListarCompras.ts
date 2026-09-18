@@ -7,7 +7,7 @@
 // valida contra `custom:station_scope` antes de tocar el repositorio.
 
 import { AuthContext, estacionUnicaDelToken, hasAccessToStation } from '@fuelhub/shared-kernel';
-import { AccesoDenegadoEstacionError, ParametrosInvalidosError, type CategoriaProducto, type EstadoCierre } from '@fuelhub/shared-kernel';
+import { AccesoDenegadoEstacionError, ParametrosInvalidosError, type CategoriaProducto, type EstadoCompra } from '@fuelhub/shared-kernel';
 import { normalizarPaginacion, construirPaginacion, type ResultadoPaginado } from '../../domain/value-objects/Paginacion';
 import type { CompraIngestaRepository, CompraResumenDTO } from '../ports/CompraIngestaRepository';
 
@@ -57,14 +57,22 @@ export class ListarCompras {
   }
 }
 
-function validarEstado(valor?: string): EstadoCierre {
+const ESTADOS_VALIDOS: readonly EstadoCompra[] = ['ACTIVO', 'ANULADO', 'PENDIENTE_REVISION'];
+
+// v1.81: acepta PENDIENTE_REVISION -- antes de la capacidad de lectura de
+// facturas por correo, ningún flujo escribía ese estado, así que aceptarlo
+// acá no tenía ningún efecto real (quedaba documentado como pendiente,
+// nunca bloqueaba nada). Ahora sí hace falta: es como Jorge filtra las
+// compras que el Lambda de correo dejó para que él revise
+// (GET /compras?estado=PENDIENTE_REVISION).
+function validarEstado(valor?: string): EstadoCompra {
   if (valor === undefined) return 'ACTIVO'; // default del contrato, mismo criterio que GET /cierres-turno
-  if (valor !== 'ACTIVO' && valor !== 'ANULADO') {
+  if (!ESTADOS_VALIDOS.includes(valor as EstadoCompra)) {
     throw new ParametrosInvalidosError('Parámetro "estado" inválido.', [
-      { field: 'estado', issue: 'debe ser ACTIVO o ANULADO' },
+      { field: 'estado', issue: `debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}` },
     ]);
   }
-  return valor;
+  return valor as EstadoCompra;
 }
 
 function validarCategoria(valor?: string): CategoriaProducto | undefined {
