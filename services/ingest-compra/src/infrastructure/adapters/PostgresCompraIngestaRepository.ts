@@ -339,7 +339,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         parametros.push(paramText('numeroGuia', cambios.numeroGuia));
       }
       if (cambios.estado !== undefined) {
-        sets.push('estado = CAST(:estado AS estado_cierre)');
+        sets.push('estado = CAST(:estado AS estado_compra)');
         parametros.push(paramText('estado', cambios.estado));
       }
 
@@ -676,7 +676,7 @@ function paramLong(name: string, value: number): SqlParameter {
  * introducido por este cambio).
  */
 function construirWhereCompras(filtros: FiltrosCompra): { whereSql: string; parameters: SqlParameter[] } {
-  const condiciones: string[] = ['c.estado = CAST(:estado AS estado_cierre)'];
+  const condiciones: string[] = ['c.estado = CAST(:estado AS estado_compra)'];
   const parameters: SqlParameter[] = [paramText('estado', filtros.estado)];
 
   if (filtros.estacionCodigo) {

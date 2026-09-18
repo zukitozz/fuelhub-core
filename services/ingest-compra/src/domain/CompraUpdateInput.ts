@@ -21,7 +21,13 @@
 //   2. `estado` deja anular una compra (`'ANULADO'`) sin borrarla --
 //     confirmado con Jorge: se prefiere mantener el historial completo para
 //     auditoría (mismo criterio que `cierres_dia`/`cierres_turno`) en vez
-//     de un DELETE físico. Reutiliza el mismo ENUM `estado_cierre`.
+//     de un DELETE físico. Hasta v1.79 reutilizaba el mismo ENUM
+//     `estado_cierre` que `cierres_dia`/`cierres_turno`; desde v1.80
+//     `compras.estado` tiene su propio tipo, `estado_compra`, con un
+//     tercer valor (`PENDIENTE_REVISION`) que no aplica acá -- esta
+//     validación sigue aceptando solo `ACTIVO`/`ANULADO` a propósito, ese
+//     tercer estado solo lo escribe internamente el Lambda de ingesta por
+//     correo (ver `services/ingest-compra-correo`), nunca este PUT manual.
 //
 //   La validación "la suma de destinos no puede superar la cantidad" NO se
 //   hace acá cuando `cantidad` no viene en este mismo payload (regla 1 --
