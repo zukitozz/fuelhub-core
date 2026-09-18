@@ -35,6 +35,17 @@
 // RUC (ej. `20123456789` se vuelve el number `20123456789`, no un string);
 // no hay pérdida de precisión posible (11 dígitos está lejísimos del límite
 // de entero seguro de JS) así que `String(valor)` alcanza para recuperarlo.
+//
+// v1.81 -- `numeroLinea` (a pedido de Jorge, al planear el caso de uso que
+// orquesta esto: hay que estar preparados para facturas con VARIOS
+// productos en líneas distintas, aunque hoy todas las reales traen uno
+// solo). Se toma de `InvoiceLine/cbc:ID` -- UBL 2.1 lo exige siempre (es el
+// número de línea dentro de la factura, "1", "2", ...), pero por las dudas
+// de un emisor que lo omita, cae al índice 1-based (`indice + 1`) como
+// respaldo. Es justo lo que la migración 1788700000000 usa junto con
+// `proveedor_ruc`/`numero_comprobante` para el índice único que evita
+// reprocesar la MISMA línea dos veces sin bloquear líneas DISTINTAS de la
+// misma factura.
 
 import { XMLParser } from 'fast-xml-parser';
 
@@ -46,6 +57,7 @@ export class FacturaXmlInvalidaError extends Error {
 }
 
 export interface FacturaProveedorItemDTO {
+  readonly numeroLinea: string;
   readonly descripcion: string;
   readonly cantidad: number;
   readonly unidadMedida: string;
@@ -127,6 +139,9 @@ function parsearLinea(lineaSinTipar: unknown, indice: number): FacturaProveedorI
   }
   const linea = lineaSinTipar as Record<string, unknown>;
 
+  const numeroLineaTexto = valorDeTexto(linea.ID);
+  const numeroLinea = numeroLineaTexto !== undefined && String(numeroLineaTexto).trim() !== '' ? String(numeroLineaTexto).trim() : String(indice + 1);
+
   const cantidadNodo = linea.InvoicedQuantity;
   const cantidad = requerirNumero(cantidadNodo, `${contexto}/InvoicedQuantity`);
   const unidadMedida = extraerAtributo(cantidadNodo, '@_unitCode') ?? 'NIU'; // NIU (unidad) es el default UBL cuando no se especifica
@@ -135,7 +150,7 @@ function parsearLinea(lineaSinTipar: unknown, indice: number): FacturaProveedorI
   const precioUnitario = requerirNumero(navegar(linea, ['Price', 'PriceAmount']), `${contexto}/Price/PriceAmount`);
   const importe = requerirNumero(linea.LineExtensionAmount, `${contexto}/LineExtensionAmount`);
 
-  return { descripcion, cantidad, unidadMedida, precioUnitario, importe };
+  return { numeroLinea, descripcion, cantidad, unidadMedida, precioUnitario, importe };
 }
 
 function navegar(nodo: unknown, ruta: readonly string[]): unknown {

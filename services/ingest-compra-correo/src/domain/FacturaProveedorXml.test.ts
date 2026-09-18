@@ -68,16 +68,16 @@ describe('parsearFacturaProveedorXml', () => {
       fechaEmision: '2026-09-15',
       moneda: 'PEN',
       importeTotal: 1550,
-      items: [{ descripcion: 'DIESEL B5 S-50', cantidad: 100, unidadMedida: 'GLL', precioUnitario: 15.5, importe: 1550 }],
+      items: [{ numeroLinea: '1', descripcion: 'DIESEL B5 S-50', cantidad: 100, unidadMedida: 'GLL', precioUnitario: 15.5, importe: 1550 }],
     });
   });
 
-  it('extrae varios ítems (InvoiceLine como array) y respeta la unidad de medida de cada uno', () => {
+  it('extrae varios ítems (InvoiceLine como array), cada uno con su propio numeroLinea, y respeta la unidad de medida de cada uno', () => {
     const resultado = parsearFacturaProveedorXml(facturaValida(LINEA_DIESEL + LINEA_ADITIVO));
 
     expect(resultado.items).toEqual([
-      { descripcion: 'DIESEL B5 S-50', cantidad: 100, unidadMedida: 'GLL', precioUnitario: 15.5, importe: 1550 },
-      { descripcion: 'ADITIVO LIMPIA INYECTORES', cantidad: 2, unidadMedida: 'NIU', precioUnitario: 25, importe: 50 },
+      { numeroLinea: '1', descripcion: 'DIESEL B5 S-50', cantidad: 100, unidadMedida: 'GLL', precioUnitario: 15.5, importe: 1550 },
+      { numeroLinea: '2', descripcion: 'ADITIVO LIMPIA INYECTORES', cantidad: 2, unidadMedida: 'NIU', precioUnitario: 25, importe: 50 },
     ]);
   });
 
@@ -93,6 +93,22 @@ describe('parsearFacturaProveedorXml', () => {
     const resultado = parsearFacturaProveedorXml(facturaValida(lineaSinUnitCode));
 
     expect(resultado.items[0]?.unidadMedida).toBe('NIU');
+  });
+
+  it('usa el índice 1-based como numeroLinea de respaldo si la línea no trae cbc:ID (UBL lo exige, pero por las dudas)', () => {
+    const lineaSinId = `
+      <cac:InvoiceLine>
+        <cbc:InvocedQuantitySinUsar>ignorado</cbc:InvocedQuantitySinUsar>
+        <cbc:InvoicedQuantity unitCode="NIU">1</cbc:InvoicedQuantity>
+        <cbc:LineExtensionAmount>5.00</cbc:LineExtensionAmount>
+        <cac:Item><cbc:Description>ITEM SIN ID DE LINEA</cbc:Description></cac:Item>
+        <cac:Price><cbc:PriceAmount>5.00</cbc:PriceAmount></cac:Price>
+      </cac:InvoiceLine>`;
+
+    const resultado = parsearFacturaProveedorXml(facturaValida(LINEA_DIESEL + lineaSinId));
+
+    expect(resultado.items[0]?.numeroLinea).toBe('1');
+    expect(resultado.items[1]?.numeroLinea).toBe('2'); // índice 1-based (segunda línea), no el "1" de LINEA_DIESEL
   });
 
   it('rechaza XML mal formado', () => {
