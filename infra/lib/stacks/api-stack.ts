@@ -567,13 +567,18 @@ export class ApiStack extends Stack {
     dataStack.cluster.grantDataApiAccess(ingestCompraCorreo);
     gmailProveedoresSecret.grantRead(ingestCompraCorreo);
 
-    // Cada 30 minutos -- suficiente para una capacidad que reemplaza
-    // digitación manual (no hay urgencia de segundos/minutos como sí la
-    // tendría, por ejemplo, alertar sobre un cierre). Jorge puede ajustar
-    // este intervalo después sin tocar código -- es un simple cambio de
-    // `Duration` acá.
+    // Cada 30 minutos en prod -- suficiente para una capacidad que
+    // reemplaza digitación manual (no hay urgencia de segundos/minutos como
+    // sí la tendría, por ejemplo, alertar sobre un cierre). En dev, cada 3
+    // minutos -- pedido explícito de Jorge para poder probar el flujo
+    // completo (etiquetar un correo -> ver la compra aparecer) sin esperar
+    // media hora por vuelta. Bajar esto más (EventBridge admite hasta 1
+    // minuto) no tiene sentido: Gmail no entrega más rápido que eso y solo
+    // gastaría invocaciones de más.
     new events.Rule(this, 'IngestCompraCorreoSchedule', {
-      schedule: events.Schedule.rate(Duration.minutes(30)),
+      schedule: events.Schedule.rate(
+        Duration.minutes(props.ambiente === 'prod' ? 30 : 3)
+      ),
       targets: [new targets.LambdaFunction(ingestCompraCorreo)],
     });
 
