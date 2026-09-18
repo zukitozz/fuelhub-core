@@ -45,6 +45,15 @@
 //      de "la base también lo garantiza, no solo la aplicación" que ya
 //      documenta esa migración) -- el caso de uso lo trata igual que un
 //      `existeComprobante` que hubiera dado `true`.
+//
+//   5. `listarConfiguracionesCorreoActivas` (v1.82, multiempresa real):
+//      YA NO hay un único buzón compartido por todo el grupo -- cada
+//      estación puede tener su propio buzón (o compartir uno con otra,
+//      distinguiéndose por etiqueta -- confirmado con Jorge), matriculado
+//      en la tabla `estaciones_correo_proveedores` (migración
+//      1788800000000). El composition root (`handler.ts`) usa esto para
+//      saber CUÁLES (secreto, etiqueta) tiene que sondear en cada corrida
+//      -- ya no es un dato fijo en variables de entorno/CDK.
 
 import type { CategoriaProducto } from '@fuelhub/shared-kernel';
 
@@ -54,6 +63,18 @@ export type EstadoCompraCorreo = 'ACTIVO' | 'PENDIENTE_REVISION';
 export interface EstacionPorRuc {
   readonly id: string;
   readonly codigo: string;
+}
+
+/**
+ * Una fila de `estaciones_correo_proveedores` (v1.82) -- qué buzón/etiqueta
+ * sondear para UNA estación. Dos filas pueden repetir el mismo
+ * `nombreSecretoGmail` si esas estaciones comparten buzón físico -- lo que
+ * las distingue es `etiquetaGmail`, nunca el secreto por sí solo.
+ */
+export interface ConfiguracionCorreoEstacion {
+  readonly estacionId: string;
+  readonly nombreSecretoGmail: string;
+  readonly etiquetaGmail: string;
 }
 
 export interface ProductoActivo {
@@ -95,4 +116,6 @@ export interface CompraCorreoRepository {
   existeComprobante(proveedorRuc: string, numeroComprobante: string, numeroLineaComprobante: string): Promise<boolean>;
   /** Lanza `ComprobanteDuplicadoError` -- ver cabecera, punto 4. */
   registrarCompra(datos: DatosCompraCorreoAInsertar): Promise<{ id: string }>;
+  /** Ver cabecera, punto 5 (v1.82). */
+  listarConfiguracionesCorreoActivas(): Promise<readonly ConfiguracionCorreoEstacion[]>;
 }

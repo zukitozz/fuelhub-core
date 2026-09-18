@@ -1,20 +1,29 @@
 #!/usr/bin/env node
 // scripts/gmail-oauth-setup.mjs
 //
-// Herramienta de configuración de un solo uso para la capacidad nueva de
-// leer facturas de proveedores por correo (v1.80). Corre un flujo OAuth de
-// Google contra el buzón de Gmail elegido, y guarda el `refresh_token`
-// resultante DIRECTO en AWS Secrets Manager -- nunca lo imprime en pantalla
-// ni lo devuelve como valor de este script, para que no termine pegado en
-// ningún chat/log (misma regla que el resto de esta sesión: ningún secreto
-// cliente pasa por acá).
+// Herramienta de configuración para la capacidad de leer facturas de
+// proveedores por correo (v1.80, multiempresa real desde v1.82). Corre un
+// flujo OAuth de Google contra el buzón de Gmail elegido, y guarda el
+// `refresh_token` resultante DIRECTO en AWS Secrets Manager -- nunca lo
+// imprime en pantalla ni lo devuelve como valor de este script, para que
+// no termine pegado en ningún chat/log (misma regla que el resto de esta
+// sesión: ningún secreto cliente pasa por acá).
 //
 // Corre esto en TU máquina, con `aws configure` ya armado con tus propias
 // credenciales de AWS (las de este script nunca las ve nadie más que tú) --
 // Jorge, no yo, tiene acceso real a la cuenta de AWS.
 //
+// v1.82 -- ya NO hay un único buzón compartido por grupo/ambiente. Ahora
+// corrés este script UNA VEZ POR BUZÓN (`--buzon <slug>`, un nombre libre
+// que vos elegís -- ej. "chancayllo", "grupo-compartido") y el nombre del
+// secreto que arma es `fuelhubcore/<grupo>/<ambiente>/gmail-proveedores/<slug>`.
+// Ese nombre completo es lo que después va en la columna
+// `nombre_secreto_gmail` de la tabla `estaciones_correo_proveedores`
+// (migración 1788800000000) para cada estación que lea de ese buzón -- si
+// dos estaciones comparten buzón, las dos filas repiten el mismo slug acá.
+//
 // Uso:
-//   node scripts/gmail-oauth-setup.mjs --grupo nonato --env dev \
+//   node scripts/gmail-oauth-setup.mjs --grupo nonato --env prod --buzon chancayllo \
 //     --client-id "TU_CLIENT_ID.apps.googleusercontent.com" \
 //     --client-secret "TU_CLIENT_SECRET"
 //
@@ -30,20 +39,21 @@
 //      http://localhost:8080/oauth2callback (el OAuth Client de Google debe
 //      tener EXACTAMENTE esa URI de redirección registrada).
 //   2. Imprime la URL de autorización de Google -- la abres en tu navegador,
-//      inicias sesión con la cuenta de Gmail que va a ser el buzón de
-//      proveedores, y aceptás el permiso (vas a ver la pantalla "Google no
-//      verificó esta app" -- normal para una app de un solo usuario que
-//      conocés vos mismo, sin publicar; click en "Avanzado" -> "Ir a
-//      [nombre de la app] (no seguro)").
+//      inicias sesión con la cuenta de Gmail de ESE buzón, y aceptás el
+//      permiso (la primera vez vas a ver la pantalla "Google no verificó
+//      esta app" si la app todavía no está publicada -- click en
+//      "Avanzado" -> "Ir a [nombre de la app] (no seguro)"; si ya está
+//      publicada en Producción, como la de Jorge, ni siquiera debería
+//      aparecer).
 //   3. Captura el `code` que Google manda de vuelta al servidor local,
 //      lo cambia por tokens (`access_token`/`refresh_token`).
 //   4. Guarda `{ clientId, clientSecret, refreshToken }` en un secreto de
 //      Secrets Manager nuevo (o actualiza uno existente), con el nombre
-//      `fuelhubcore/<grupo>/<ambiente>/gmail-proveedores` -- mismo patrón de
-//      nombres por grupo/ambiente que ya usa el resto del repo
-//      (`FuelHubDataStack-<grupo>-<ambiente>`, `resolver-outputs-datastack.mjs`).
-//   5. Cierra el servidor local y termina -- no vuelve a necesitarse salvo
-//      que el refresh token se revoque o quieras apuntar a otro buzón.
+//      `fuelhubcore/<grupo>/<ambiente>/gmail-proveedores/<buzon>`.
+//   5. Cierra el servidor local y termina -- no vuelve a necesitarse para
+//      ESE buzón salvo que el refresh token se revoque. Para agregar un
+//      buzón nuevo (empresa nueva, o separar una que compartía buzón),
+//      corré este mismo script de nuevo con otro `--buzon`.
 
 import { OAuth2Client } from 'google-auth-library';
 import { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand, ResourceExistsException } from '@aws-sdk/client-secrets-manager';
@@ -54,21 +64,29 @@ const PUERTO_LOCAL = 8080;
 const REDIRECT_URI = `http://localhost:${PUERTO_LOCAL}/oauth2callback`;
 const SCOPE = 'https://www.googleapis.com/auth/gmail.modify'; // lectura + etiquetas (procesado/error) -- no manda ni borra nada
 
+const PATRON_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
 function leerArgs(argv) {
-  const args = { grupo: undefined, env: undefined, clientId: undefined, clientSecret: undefined };
+  const args = { grupo: undefined, env: undefined, buzon: undefined, clientId: undefined, clientSecret: undefined };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--grupo') args.grupo = argv[++i];
     else if (argv[i] === '--env') args.env = argv[++i];
+    else if (argv[i] === '--buzon') args.buzon = argv[++i];
     else if (argv[i] === '--client-id') args.clientId = argv[++i];
     else if (argv[i] === '--client-secret') args.clientSecret = argv[++i];
   }
-  if (!args.grupo || !args.env || !args.clientId || !args.clientSecret) {
+  if (!args.grupo || !args.env || !args.buzon || !args.clientId || !args.clientSecret) {
     throw new Error(
-      'Uso: node scripts/gmail-oauth-setup.mjs --grupo <grupoId> --env <dev|prod> --client-id <...> --client-secret <...>'
+      'Uso: node scripts/gmail-oauth-setup.mjs --grupo <grupoId> --env <dev|prod> --buzon <slug> --client-id <...> --client-secret <...>'
     );
   }
   if (args.env !== 'dev' && args.env !== 'prod') {
     throw new Error(`--env inválido: "${args.env}" -- debe ser "dev" o "prod".`);
+  }
+  if (!PATRON_SLUG.test(args.buzon)) {
+    throw new Error(
+      `--buzon inválido: "${args.buzon}" -- minúsculas, números y guiones solamente (va directo en el nombre del secreto de Secrets Manager).`
+    );
   }
   return args;
 }
@@ -130,7 +148,7 @@ async function guardarEnSecretsManager(nombreSecreto, valor) {
 }
 
 async function main() {
-  const { grupo, env, clientId, clientSecret } = leerArgs(process.argv.slice(2));
+  const { grupo, env, buzon, clientId, clientSecret } = leerArgs(process.argv.slice(2));
   const oauth2Client = new OAuth2Client({ clientId, clientSecret, redirectUri: REDIRECT_URI });
 
   const code = await esperarCodigoDeAutorizacion(oauth2Client);
@@ -145,15 +163,18 @@ async function main() {
     );
   }
 
-  const nombreSecreto = `fuelhubcore/${grupo}/${env}/gmail-proveedores`;
+  const nombreSecreto = `fuelhubcore/${grupo}/${env}/gmail-proveedores/${buzon}`;
   await guardarEnSecretsManager(nombreSecreto, {
     clientId,
     clientSecret,
     refreshToken: tokens.refresh_token,
   });
 
-  console.log('\nListo. El Lambda de ingest-compra-correo va a leer este secreto por su nombre -- no hace falta que hagas nada más acá.');
-  console.log(`Nombre del secreto (esto sí es seguro de compartir, no contiene el token): ${nombreSecreto}`);
+  console.log('\nListo. Ahora falta el paso en la base: agregá (o actualizá) la fila correspondiente en');
+  console.log('estaciones_correo_proveedores para cada estación que lea de este buzón, con:');
+  console.log(`  nombre_secreto_gmail = '${nombreSecreto}'`);
+  console.log('  etiqueta_gmail       = la etiqueta que le vas a poner a los correos de esa estación en Gmail');
+  console.log('\nNombre del secreto (esto sí es seguro de compartir, no contiene el token): ' + nombreSecreto);
 }
 
 main().catch((err) => {

@@ -16,8 +16,8 @@ import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as events from 'aws-cdk-lib/aws-events';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { Runtime } from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -540,32 +540,37 @@ export class ApiStack extends Stack {
     // events.Rule -- acá con `schedule` (EventBridge Scheduler / cron) en
     // vez de un eventPattern de negocio.
     //
-    // El secreto con las credenciales de Gmail (clientId/clientSecret/
-    // refreshToken) lo crea Jorge corriendo `scripts/gmail-oauth-setup.mjs`
-    // en su máquina (nunca pasa por este repo/CDK) -- acá solo se IMPORTA
-    // por nombre (mismo patrón `fuelhubcore/<grupo>/<ambiente>/<nombre>`
-    // que ya usa `resolver-outputs-datastack.mjs` para otros recursos por
-    // grupo/ambiente) y se le da permiso de lectura al Lambda.
-    const gmailProveedoresSecret = secretsmanager.Secret.fromSecretNameV2(
-      this,
-      'GmailProveedoresSecret',
-      `fuelhubcore/${props.grupoId}/${props.ambiente}/gmail-proveedores`
-    );
-
+    // v1.82 -- multiempresa real: ya NO hay un único secreto de Gmail por
+    // grupo/ambiente. Cada estación (o grupo de estaciones que comparten
+    // buzón) tiene el suyo, matriculado en `estaciones_correo_proveedores`
+    // (migración 1788800000000) -- el Lambda descubre EN TIEMPO DE
+    // EJECUCIÓN, consultando esa tabla, qué secretos leer (ver
+    // `handler.ts`). CDK no puede otorgar permisos a secretos que todavía
+    // no existen ni conoce en tiempo de síntesis, así que en vez de
+    // importar un secreto puntual y darle `grantRead`, se le da al Lambda
+    // un permiso de IAM con un patrón de ARN -- cualquier secreto bajo el
+    // prefijo `fuelhubcore/<grupo>/<ambiente>/gmail-proveedores/*` (uno por
+    // buzón, creado por `scripts/gmail-oauth-setup.mjs --buzon <slug>`).
+    // Alta de una empresa/buzón nuevo: correr el script con su `--buzon` y
+    // agregar la fila en la base -- CERO cambios de CDK, cero redeploy.
     const ingestCompraCorreo = new NodejsFunction(this, 'IngestCompraCorreoFn', {
       entry: entryDe('ingest-compra-correo'),
       runtime: Runtime.NODEJS_22_X,
       projectRoot: REPO_ROOT,
       depsLockFilePath: DEPS_LOCK_FILE_PATH,
       timeout: Duration.seconds(60),
-      environment: {
-        ...AURORA_ENV,
-        GMAIL_CREDENTIALS_SECRET_ARN: gmailProveedoresSecret.secretArn,
-      },
+      environment: AURORA_ENV,
     });
 
     dataStack.cluster.grantDataApiAccess(ingestCompraCorreo);
-    gmailProveedoresSecret.grantRead(ingestCompraCorreo);
+    ingestCompraCorreo.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:fuelhubcore/${props.grupoId}/${props.ambiente}/gmail-proveedores/*`,
+        ],
+      })
+    );
 
     // Cada 30 minutos en prod -- suficiente para una capacidad que
     // reemplaza digitación manual (no hay urgencia de segundos/minutos como

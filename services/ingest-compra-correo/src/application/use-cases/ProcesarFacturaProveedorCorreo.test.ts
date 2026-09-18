@@ -9,6 +9,7 @@ import { EstacionNoReconocidaError } from '../../domain/EstacionNoReconocidaErro
 import {
   ComprobanteDuplicadoError,
   type CompraCorreoRepository,
+  type ConfiguracionCorreoEstacion,
   type DatosCompraCorreoAInsertar,
   type EstacionPorRuc,
   type ProductoActivo,
@@ -100,6 +101,13 @@ class RepoFake implements CompraCorreoRepository {
     this.compras.push(datos);
     this.contadorId += 1;
     return { id: `compra-${this.contadorId}` };
+  }
+
+  async listarConfiguracionesCorreoActivas(): Promise<readonly ConfiguracionCorreoEstacion[]> {
+    // No lo usa `ProcesarFacturaProveedorCorreo` (eso lo consume `handler.ts`
+    // directamente) -- solo está acá para que `RepoFake` siga cumpliendo la
+    // interfaz completa del puerto.
+    return [];
   }
 }
 

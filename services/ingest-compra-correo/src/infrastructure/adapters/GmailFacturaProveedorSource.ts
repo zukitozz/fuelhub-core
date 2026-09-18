@@ -8,13 +8,23 @@
 // Secrets Manager -- ese refresh token NUNCA se lee más que acá y en el
 // script de configuración inicial, nunca se loguea.
 //
-// Tres etiquetas de Gmail (todas bajo el prefijo "FuelHub/", mismo
-// criterio de nombres jerárquicos que ya usa el resto del dominio):
+// `etiquetaOrigen` (v1.82, multiempresa real) es un parámetro del
+// constructor, NO una constante fija -- antes ("FuelHub/Proveedores") era
+// la misma para todo el grupo; ahora cada estación tiene la suya propia en
+// `estaciones_correo_proveedores` (migración 1788800000000), porque dos
+// estaciones pueden compartir el mismo buzón físico y solo se distinguen
+// por la etiqueta (confirmado con Jorge). `handler.ts` instancia un
+// `GmailFacturaProveedorSource` por cada (secreto, etiqueta) distinto que
+// encuentra en esa tabla -- ver su cabecera.
 //
-//   - `FuelHub/Proveedores`: la crea JORGE a mano en Gmail (sección
-//      handler.ts) y es donde mueve manualmente los correos con facturas
-//      que quiere que el sistema procese -- el "de dónde saco trabajo"
-//      del cron.
+// `FuelHub/Procesado`/`FuelHub/Error` SÍ siguen fijas y compartidas entre
+// todas las estaciones -- son solo "ya se intentó este mensaje", no hace
+// falta una por estación, y evita crear docenas de etiquetas casi
+// idénticas en un buzón compartido por varias estaciones.
+//
+//   - `<etiquetaOrigen>`: la crea JORGE a mano en Gmail y es donde mueve
+//      manualmente los correos con facturas que quiere que el sistema
+//      procese -- el "de dónde saco trabajo" del cron, para ESA estación.
 //   - `FuelHub/Procesado` / `FuelHub/Error`: las crea este adaptador solo
 //      la primera vez que hacen falta (`resolverLabelId`) -- Jorge no
 //      tiene que crearlas.
@@ -37,7 +47,6 @@ import type { FacturaProveedorSourcePort, MensajeFacturaProveedor } from '../../
 
 const GMAIL_API_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
-const ETIQUETA_ORIGEN = 'FuelHub/Proveedores';
 const ETIQUETA_PROCESADO = 'FuelHub/Procesado';
 const ETIQUETA_ERROR = 'FuelHub/Error';
 
@@ -62,13 +71,13 @@ export class GmailFacturaProveedorSource implements FacturaProveedorSourcePort {
   private readonly oauth2Client: OAuth2Client;
   private cacheLabelIds: Map<string, string> | undefined;
 
-  constructor(credenciales: CredencialesGmail) {
+  constructor(credenciales: CredencialesGmail, private readonly etiquetaOrigen: string) {
     this.oauth2Client = new OAuth2Client(credenciales.clientId, credenciales.clientSecret);
     this.oauth2Client.setCredentials({ refresh_token: credenciales.refreshToken });
   }
 
   async listarMensajesPendientes(): Promise<readonly MensajeFacturaProveedor[]> {
-    const q = `label:${ETIQUETA_ORIGEN} -label:${ETIQUETA_PROCESADO} -label:${ETIQUETA_ERROR}`;
+    const q = `label:${this.etiquetaOrigen} -label:${ETIQUETA_PROCESADO} -label:${ETIQUETA_ERROR}`;
     const ids = await this.listarIdsMensajes(q);
 
     const mensajes: MensajeFacturaProveedor[] = [];
