@@ -71,29 +71,68 @@ jobs:
         working-directory: infra
 
   # ---------------------------------------------------------------------------
-  # v1.81 -- Jorge decidió eliminar el ambiente `dev` de este grupo por
-  # completo (un solo buzón real de Gmail compartido entre dev/prod hacía
-  # que ambos crones compitieran por el mismo correo, y el cron de pruebas
-  # de dev -- cada 3 min -- no dejaba que Aurora dev bajara a 0 ACU nunca,
-  # con costo fijo corriendo sin necesidad real). Ya no hay ningún job
-  # `deploy-dev` acá -- un push a main solo toca prod (con su aprobación
-  # manual de siempre). Los 4 stacks de `dev` para "nonato" se destruyeron
-  # a mano una sola vez (`cdk destroy --all -c grupoId=nonato -c
-  # ambiente=dev`, corrido por Jorge -- este pipeline no tiene permisos ni
-  # motivo para destruir infraestructura). El job `synth` de arriba SIGUE
-  # validando `dev` en su matriz -- no despliega nada, así que no recrea
-  # ningún recurso; solo confirma que el código compila para ambos
-  # ambientes, útil si algún día se reactiva `dev` para otro grupo. Volver
-  # a tener un ambiente `dev` real para "nonato" es reintroducir el job
-  # `deploy-dev` que existía acá antes de este commit (recuperable del
-  # historial de git) con su propio secreto de Gmail para ese ambiente.
-  #
+  # Solo en push a main — despliega `dev` de este grupo automáticamente.
+  # Orden explícito de la sección 12.2, actualizado en v1.42 con network-stack:
+  # network → data → migraciones → auth → api.
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    needs: synth
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: dev-${{ inputs.grupo }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm ci
+        working-directory: infra
+
+      - name: Autenticar contra AWS vía OIDC (sección 12.5)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+
+      - name: Desplegar network-stack (VPC mínima sin NAT, sección 9.4/v1.42)
+        run: npx cdk deploy "FuelHubNetworkStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Desplegar data-stack
+        run: npx cdk deploy "FuelHubDataStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Correr migraciones de esquema (node-pg-migrate — sección 12.4)
+        run: npm run db:migrate -- --grupo ${{ inputs.grupo }} --env dev
+
+      - name: Desplegar auth-stack (Cognito importado, no recreado — sección 12.2/13.3)
+        run: npx cdk deploy "FuelHubAuthStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Desplegar api-stack
+        run: npx cdk deploy "FuelHubApiStack-${{ inputs.grupo }}-dev" -c grupoId=${{ inputs.grupo }} -c ambiente=dev --require-approval never
+        working-directory: infra
+
+      - name: Tests de integración (adaptadores contra dev/localstack)
+        run: npm run test:integration -- --grupo ${{ inputs.grupo }} --env dev
+
+      - name: Smoke test — token M2M real + POST/GET de prueba (sección 12.3)
+        run: npm run smoke-test -- --grupo ${{ inputs.grupo }} --env dev
+        env:
+          SMOKE_TEST_CLIENT_ID: ${{ secrets.SMOKE_TEST_CLIENT_ID }}
+          SMOKE_TEST_CLIENT_SECRET: ${{ secrets.SMOKE_TEST_CLIENT_SECRET }}
+
+  # ---------------------------------------------------------------------------
   # Requiere aprobación manual — Environment `prod-<grupo>` con "required
   # reviewers" propio: gate independiente por grupo (sección 13.5), nunca
   # corre solo porque hubo un push.
   # ---------------------------------------------------------------------------
   deploy-prod:
-    needs: synth
+    needs: deploy-dev
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: prod-${{ inputs.grupo }}   # <- gate de aprobación de ESTE grupo únicamente
