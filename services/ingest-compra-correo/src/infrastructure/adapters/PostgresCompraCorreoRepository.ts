@@ -139,7 +139,9 @@ export class PostgresCompraCorreoRepository implements CompraCorreoRepository {
     return filas.map((fila) => ({
       estacionId: String(fila.estacion_id),
       nombreSecretoGmail: String(fila.nombre_secreto_gmail),
-      etiquetaGmail: String(fila.etiqueta_gmail),
+      // `null` desde la migración 1788900000000 -- ver comentario de
+      // `ConfiguracionCorreoEstacion` en el puerto.
+      etiquetaGmail: fila.etiqueta_gmail === null || fila.etiqueta_gmail === undefined ? null : String(fila.etiqueta_gmail),
     }));
   }
 

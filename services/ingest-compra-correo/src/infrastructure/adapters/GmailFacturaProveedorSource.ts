@@ -17,6 +17,14 @@
 // `GmailFacturaProveedorSource` por cada (secreto, etiqueta) distinto que
 // encuentra en esa tabla -- ver su cabecera.
 //
+// `etiquetaOrigen` es `string | null` desde la migración 1788900000000 --
+// `null` significa "sin filtro de etiqueta, sondear TODO el buzón": un
+// buzón dedicado exclusivamente a facturas no necesita que Jorge etiquete
+// nada a mano, todo lo que llegue (y no esté ya Procesado/Error) es
+// candidato. El query de búsqueda simplemente omite el término positivo
+// `label:X` en ese caso -- las exclusiones de Procesado/Error se
+// mantienen siempre, filtre por etiqueta o no.
+//
 // `FuelHub/Procesado`/`FuelHub/Error` SÍ siguen fijas y compartidas entre
 // todas las estaciones -- son solo "ya se intentó este mensaje", no hace
 // falta una por estación, y evita crear docenas de etiquetas casi
@@ -71,13 +79,18 @@ export class GmailFacturaProveedorSource implements FacturaProveedorSourcePort {
   private readonly oauth2Client: OAuth2Client;
   private cacheLabelIds: Map<string, string> | undefined;
 
-  constructor(credenciales: CredencialesGmail, private readonly etiquetaOrigen: string) {
+  constructor(credenciales: CredencialesGmail, private readonly etiquetaOrigen: string | null) {
     this.oauth2Client = new OAuth2Client(credenciales.clientId, credenciales.clientSecret);
     this.oauth2Client.setCredentials({ refresh_token: credenciales.refreshToken });
   }
 
   async listarMensajesPendientes(): Promise<readonly MensajeFacturaProveedor[]> {
-    const q = `label:${this.etiquetaOrigen} -label:${ETIQUETA_PROCESADO} -label:${ETIQUETA_ERROR}`;
+    // `etiquetaOrigen === null` -- sin filtro positivo, sondea TODO el
+    // buzón (ver cabecera). Las exclusiones de Procesado/Error siempre
+    // van, filtre por etiqueta o no -- son las que evitan releer el mismo
+    // mensaje en corridas futuras.
+    const filtroEtiqueta = this.etiquetaOrigen ? `label:${this.etiquetaOrigen} ` : '';
+    const q = `${filtroEtiqueta}-label:${ETIQUETA_PROCESADO} -label:${ETIQUETA_ERROR}`;
     const ids = await this.listarIdsMensajes(q);
 
     const mensajes: MensajeFacturaProveedor[] = [];

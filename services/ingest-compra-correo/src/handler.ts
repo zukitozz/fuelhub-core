@@ -38,6 +38,13 @@
 // 1788600000000), no una clave de idempotencia por invocación: dos
 // corridas del cron perfectamente pueden procesar el mismo mensaje si las
 // etiquetas de Gmail se desincronizaran, y eso ya está cubierto.
+//
+// v1.82.1 -- `etiquetaGmail` puede venir `null` (migración 1788900000000):
+// un buzón dedicado exclusivamente a facturas (sin mezclar con otro
+// correo) no necesita que Jorge etiquete nada a mano -- se sondea TODO el
+// buzón. `GmailFacturaProveedorSource` es quien arma el query distinto
+// según el caso; acá solo hace falta que la deduplicación por (secreto,
+// etiqueta) trate `null` como un valor de etiqueta más (ver `clave()`).
 
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
@@ -89,9 +96,15 @@ async function cargarCredencialesGmail(nombreSecreto: string): Promise<Credencia
   return { clientId: datos.clientId, clientSecret: datos.clientSecret, refreshToken: datos.refreshToken };
 }
 
-/** Clave de deduplicación -- dos configuraciones con el mismo secreto Y la misma etiqueta son, a efectos de sondeo, la misma cosa. */
+/**
+ * Clave de deduplicación -- dos configuraciones con el mismo secreto Y la
+ * misma etiqueta son, a efectos de sondeo, la misma cosa. `etiquetaGmail`
+ * puede ser `null` (migración 1788900000000, "sin filtro de etiqueta") --
+ * se normaliza a un literal fijo para la clave en vez de dejar que el
+ * template string lo coaccione implícitamente a "null".
+ */
 function clave(config: Pick<ConfiguracionCorreoEstacion, 'nombreSecretoGmail' | 'etiquetaGmail'>): string {
-  return `${config.nombreSecretoGmail}::${config.etiquetaGmail}`;
+  return `${config.nombreSecretoGmail}::${config.etiquetaGmail ?? '(sin-etiqueta)'}`;
 }
 
 export const handler = async (): Promise<{ procesados: number; pendientesLeidos: number; buzonesSondeados: number }> => {
@@ -118,12 +131,12 @@ export const handler = async (): Promise<{ procesados: number; pendientesLeidos:
           await fuente.marcarProcesado(mensaje.mensajeId);
           procesados += 1;
           console.log(
-            `[ingest-compra-correo] etiqueta=${config.etiquetaGmail} mensaje=${mensaje.mensajeId} comprobante=${resultado.numeroComprobante} lineas=${JSON.stringify(resultado.lineas)}`
+            `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} comprobante=${resultado.numeroComprobante} lineas=${JSON.stringify(resultado.lineas)}`
           );
         } catch (err) {
           await fuente.marcarError(mensaje.mensajeId);
           console.error(
-            `[ingest-compra-correo] etiqueta=${config.etiquetaGmail} mensaje=${mensaje.mensajeId} error: ${err instanceof Error ? err.message : String(err)}`
+            `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} error: ${err instanceof Error ? err.message : String(err)}`
           );
         }
       }
@@ -131,7 +144,7 @@ export const handler = async (): Promise<{ procesados: number; pendientesLeidos:
       // Una configuración entera que falla (secreto inexistente/revocado,
       // Gmail caído para ESE buzón) no tumba las demás -- ver cabecera.
       console.error(
-        `[ingest-compra-correo] fallo sondeando secreto=${config.nombreSecretoGmail} etiqueta=${config.etiquetaGmail}: ${err instanceof Error ? err.message : String(err)}`
+        `[ingest-compra-correo] fallo sondeando secreto=${config.nombreSecretoGmail} etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }

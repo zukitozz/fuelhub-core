@@ -70,11 +70,17 @@ export interface EstacionPorRuc {
  * sondear para UNA estación. Dos filas pueden repetir el mismo
  * `nombreSecretoGmail` si esas estaciones comparten buzón físico -- lo que
  * las distingue es `etiquetaGmail`, nunca el secreto por sí solo.
+ *
+ * `etiquetaGmail` es `string | null` desde la migración 1788900000000 --
+ * `null` significa "no filtrar por etiqueta, sondear TODO el buzón" (caso
+ * de un buzón dedicado exclusivamente a facturas, donde exigir una
+ * etiqueta sería un paso manual de más). Un string sigue filtrando por esa
+ * etiqueta puntual, igual que antes.
  */
 export interface ConfiguracionCorreoEstacion {
   readonly estacionId: string;
   readonly nombreSecretoGmail: string;
-  readonly etiquetaGmail: string;
+  readonly etiquetaGmail: string | null;
 }
 
 export interface ProductoActivo {
