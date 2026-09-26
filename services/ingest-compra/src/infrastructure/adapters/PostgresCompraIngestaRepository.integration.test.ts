@@ -246,6 +246,47 @@ describe('PostgresCompraIngestaRepository (integración real, sin mocks)', () =>
     expect(resultado.pagination.page).toBe(1);
   }, 30_000);
 
+  it('listar sin `estado` no filtra por estado -- devuelve ACTIVO, ANULADO y PENDIENTE_REVISION juntos (v1.82.2)', async () => {
+    const estacion = await primeraEstacionSembrada();
+    const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());
+
+    const activa = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoNombre: `${MARCADOR_CI} v1.82.2 activa`,
+      categoria: 'NO_COMBUSTIBLE',
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 1,
+      costoUnitario: 1,
+    });
+    idsCreados.push(activa.id);
+
+    const paraAnular = await ingestaRepo.registrar({
+      codigoEstacion: estacion.codigo,
+      productoNombre: `${MARCADOR_CI} v1.82.2 anulada`,
+      categoria: 'NO_COMBUSTIBLE',
+      proveedor: MARCADOR_CI,
+      fecha: new Date().toISOString(),
+      cantidad: 1,
+      costoUnitario: 1,
+    });
+    idsCreados.push(paraAnular.id);
+    const anulada = await ingestaRepo.actualizar(paraAnular.id, { estado: 'ANULADO' });
+    expect(anulada.estado).toBe('ANULADO');
+
+    // Sin `estado` en el filtro -- la firma de FiltrosCompra lo permite
+    // opcional desde v1.82.2 (ver puerto CompraIngestaRepository.ts).
+    const hoy = new Date().toISOString().slice(0, 10);
+    const resultado = await ingestaRepo.listar(
+      { estacionCodigo: estacion.codigo, fechaDesde: hoy, fechaHasta: hoy },
+      { page: 1, pageSize: 100 }
+    );
+
+    const idsListados = resultado.data.map((c) => c.id);
+    expect(idsListados).toContain(activa.id);
+    expect(idsListados).toContain(anulada.id); // la clave del test -- antes de v1.82.2 esto NO aparecía sin pedirlo explícito
+  }, 30_000);
+
   it('listar corre con fechaDesde/fechaHasta reales, filtrado por estación (regresión del bug de CAST, v1.67)', async () => {
     const estacion = await primeraEstacionSembrada();
     const ingestaRepo = new PostgresCompraIngestaRepository(cliente(), config());

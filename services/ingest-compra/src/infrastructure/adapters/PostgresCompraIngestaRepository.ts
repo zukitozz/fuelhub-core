@@ -675,9 +675,19 @@ function paramLong(name: string, value: number): SqlParameter {
  * `mapErrorToResponse`, gap preexistente y aceptado en todo el repo, no
  * introducido por este cambio).
  */
+// v1.82.2: `estado` es opcional -- si viene undefined, la condición se
+// omite del WHERE por completo (sin filtro, cualquier estado). Antes esta
+// función asumía `filtros.estado` siempre presente porque el caso de uso
+// (`ListarCompras`) lo default-eaba a 'ACTIVO' cuando el caller no
+// mandaba nada; ese default ya no existe (ver cabecera de `ListarCompras.ts`).
 function construirWhereCompras(filtros: FiltrosCompra): { whereSql: string; parameters: SqlParameter[] } {
-  const condiciones: string[] = ['c.estado = CAST(:estado AS estado_compra)'];
-  const parameters: SqlParameter[] = [paramText('estado', filtros.estado)];
+  const condiciones: string[] = [];
+  const parameters: SqlParameter[] = [];
+
+  if (filtros.estado !== undefined) {
+    condiciones.push('c.estado = CAST(:estado AS estado_compra)');
+    parameters.push(paramText('estado', filtros.estado));
+  }
 
   if (filtros.estacionCodigo) {
     condiciones.push('e.codigo = :estacionCodigo');
@@ -703,7 +713,12 @@ function construirWhereCompras(filtros: FiltrosCompra): { whereSql: string; para
     parameters.push(paramText('categoria', filtros.categoria));
   }
 
-  return { whereSql: `WHERE ${condiciones.join(' AND ')}`, parameters };
+  // Sin condiciones (ningún filtro mandado) -- WHERE TRUE en vez de un WHERE
+  // vacío/inválido; sintácticamente correcto y deja el resto de la query
+  // (JOINs, ORDER BY, paginación) sin ninguna rama especial que distinga
+  // "hay condiciones" de "no hay condiciones".
+  const whereSql = condiciones.length > 0 ? `WHERE ${condiciones.join(' AND ')}` : 'WHERE TRUE';
+  return { whereSql, parameters };
 }
 
 function leerConteo(filas: Record<string, unknown>[]): number {

@@ -5,6 +5,17 @@
 // explícito, se usa la estación única del token cuando aplica (sección
 // 5.4); si el caller manda una estación, o el token resuelve a varias, se
 // valida contra `custom:station_scope` antes de tocar el repositorio.
+//
+// v1.82.2 -- `estado` deja de tener un default implícito ('ACTIVO'):
+// pedido explícito de Jorge, `GET /compras` sin ningún parámetro `estado`
+// ahora devuelve compras de CUALQUIER estado (ACTIVO, ANULADO,
+// PENDIENTE_REVISION), no solo ACTIVO. Antes de este cambio, un caller que
+// llamaba `/compras` a secas nunca veía las ANULADO/PENDIENTE_REVISION sin
+// saber que tenía que pedirlas explícito -- confuso justo ahora que el
+// Lambda de correo empieza a dejar compras en PENDIENTE_REVISION con
+// regularidad. Si el caller SÍ quiere un estado puntual, sigue pudiendo
+// pedirlo con `?estado=ACTIVO` como siempre -- este cambio solo afecta el
+// comportamiento cuando el parámetro se omite del todo.
 
 import { AuthContext, estacionUnicaDelToken, hasAccessToStation } from '@fuelhub/shared-kernel';
 import { AccesoDenegadoEstacionError, ParametrosInvalidosError, type CategoriaProducto, type EstadoCompra } from '@fuelhub/shared-kernel';
@@ -43,7 +54,7 @@ export class ListarCompras {
         estacionCodigo,
         fechaDesde: query.fechaDesde,
         fechaHasta: query.fechaHasta,
-        estado,
+        estado, // undefined -- ver cabecera v1.82.2 -- retorna cualquier estado
         productoId: query.productoId,
         categoria,
       },
@@ -65,8 +76,11 @@ const ESTADOS_VALIDOS: readonly EstadoCompra[] = ['ACTIVO', 'ANULADO', 'PENDIENT
 // nunca bloqueaba nada). Ahora sí hace falta: es como Jorge filtra las
 // compras que el Lambda de correo dejó para que él revise
 // (GET /compras?estado=PENDIENTE_REVISION).
-function validarEstado(valor?: string): EstadoCompra {
-  if (valor === undefined) return 'ACTIVO'; // default del contrato, mismo criterio que GET /cierres-turno
+//
+// v1.82.2: ya NO hay default -- si `valor` viene undefined, se devuelve
+// undefined (sin filtro de estado, ver cabecera del archivo), no 'ACTIVO'.
+function validarEstado(valor?: string): EstadoCompra | undefined {
+  if (valor === undefined) return undefined;
   if (!ESTADOS_VALIDOS.includes(valor as EstadoCompra)) {
     throw new ParametrosInvalidosError('Parámetro "estado" inválido.', [
       { field: 'estado', issue: `debe ser uno de: ${ESTADOS_VALIDOS.join(', ')}` },

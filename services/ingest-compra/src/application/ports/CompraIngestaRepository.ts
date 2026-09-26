@@ -107,12 +107,21 @@ export interface CompraResumenDTO {
   readonly creadoEn: string;
 }
 
-/** Filtros de `GET /compras` (v1.67) -- `estacionCodigo` ya resuelto/autorizado por el caso de uso (sección 5.4), igual que `FiltrosCierreTurno`. */
+/**
+ * Filtros de `GET /compras` (v1.67) -- `estacionCodigo` ya resuelto/autorizado
+ * por el caso de uso (sección 5.4), igual que `FiltrosCierreTurno`.
+ *
+ * `estado` es `EstadoCompra | undefined` desde v1.82.2 -- `undefined` NO es
+ * "usa el default ACTIVO" (así funcionaba hasta entonces), es "sin filtro,
+ * cualquier estado" -- pedido explícito de Jorge, ver cabecera de
+ * `ListarCompras.ts`. El adaptador (`construirWhereCompras`) omite la
+ * condición `estado = ...` del WHERE por completo cuando viene undefined.
+ */
 export interface FiltrosCompra {
   readonly estacionCodigo?: string;
   readonly fechaDesde?: string; // YYYY-MM-DD, sobre compras.fecha
   readonly fechaHasta?: string;
-  readonly estado: EstadoCompra;
+  readonly estado?: EstadoCompra;
   readonly productoId?: string;
   readonly categoria?: CategoriaProducto;
 }

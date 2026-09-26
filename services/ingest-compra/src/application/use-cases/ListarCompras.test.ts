@@ -3,8 +3,9 @@
 // Mismo criterio de test que ListarCierresTurno (consulta-cierres): fake del
 // puerto, sin AWS. Cubre la resolución de `estacionCodigo` por defecto desde
 // el token de una sola estación, la autorización cuando se manda un código
-// explícito, el default de `estado`, la validación de `categoria`, y que la
-// paginación devuelta se recalcula con el `totalItems` real del repositorio.
+// explícito, que `estado` ya NO tiene default implícito (v1.82.2 -- sin el
+// parámetro, retorna cualquier estado), la validación de `categoria`, y que
+// la paginación devuelta se recalcula con el `totalItems` real del repositorio.
 
 import { AccesoDenegadoEstacionError, ParametrosInvalidosError, type AuthContext } from '@fuelhub/shared-kernel';
 import { ListarCompras } from './ListarCompras';
@@ -71,13 +72,13 @@ describe('ListarCompras', () => {
     );
   });
 
-  it('usa ACTIVO como estado por defecto', async () => {
+  it('sin estado explícito, no filtra por estado -- retorna cualquiera (v1.82.2, ya no hay default ACTIVO)', async () => {
     const repo = new RepoFake();
     const useCase = new ListarCompras(repo);
 
     await useCase.ejecutar(auth(), {});
 
-    expect(repo.filtrosRecibidos?.estado).toBe('ACTIVO');
+    expect(repo.filtrosRecibidos?.estado).toBeUndefined();
   });
 
   it('rechaza con 400 un estado inválido', async () => {

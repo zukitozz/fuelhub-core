@@ -1167,7 +1167,9 @@ paths:
         compras no tenía forma de listar/buscar. `merma`/`estado` vienen
         calculados igual que en `POST`/`PUT /compras/{id}`. Lambda
         `ingest-compra` (comparte función con el resto de operaciones de
-        `/compras`).
+        `/compras`). v1.82.2 -- `estado` dejó de tener un
+        default implícito ('ACTIVO'); sin el parámetro, retorna cualquier
+        estado.
       operationId: listarCompras
       x-required-scope: fuelhub-api/cierres.read
       parameters:
@@ -1177,10 +1179,14 @@ paths:
         - name: estado
           in: query
           required: false
+          description: >
+            Sin este parámetro (v1.82.2), devuelve compras en CUALQUIER
+            estado (ACTIVO, ANULADO, PENDIENTE_REVISION) -- antes de este
+            cambio el default implícito era ACTIVO. Para un estado puntual,
+            pedirlo explícito.
           schema:
             type: string
             enum: [ACTIVO, ANULADO, PENDIENTE_REVISION]
-            default: ACTIVO
         - name: productoId
           in: query
           required: false
