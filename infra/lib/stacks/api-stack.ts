@@ -65,6 +65,12 @@ function entryDocumentoDe(servicio: string): string {
 function entryGenerarDocumentoDe(servicio: string): string {
   return path.join(SERVICES_ROOT, servicio, 'src', 'handler-generar-documento.ts');
 }
+// entryPeriodoDe -- v1.79, GET /comprobantes/consulta (descarga masiva por
+// periodo): mismo criterio que entryDocumentoDe arriba -- Lambda separado
+// con su propio entry (handler-periodo.ts, no handler.ts).
+function entryPeriodoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-periodo.ts');
+}
 
 export interface ApiStackProps extends StackProps {
   readonly grupoId: string;
@@ -220,11 +226,19 @@ export class ApiStack extends Stack {
     // persistente de los comprobantes de un grifo: SIN autoDeleteObjects,
     // SIN lifecycleRules de expiración. RemovalPolicy por defecto es RETAIN
     // -- si el stack se destruye, estos documentos no se van con él.
+    // v1.79: `lifecycleRules` acotada al prefijo `_zips/` -- los .zip que
+    // arma `S3ComprobantePeriodoLecturaRepository` (descarga masiva por
+    // periodo, ver ese archivo) son generados, no el documento SUNAT
+    // original, así que no les aplica el `RemovalPolicy.RETAIN` del resto
+    // del bucket -- se borran solos a los 2 días. El resto del bucket
+    // (los PDFs reales) queda sin regla de expiración, sin cambios.
     const comprobantesPdfBucket = new s3.Bucket(this, 'ComprobantesPdfBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{ prefix: '_zips/', expiration: Duration.days(2) }],
     });
 
-    const comprobanteNumeracion = api.root.getResource('v1')!.addResource('comprobantes').addResource('{numeracion}');
+    const comprobantes = api.root.getResource('v1')!.addResource('comprobantes');
+    const comprobanteNumeracion = comprobantes.addResource('{numeracion}');
     const comprobantePdf = comprobanteNumeracion.addResource('pdf');
 
     // requiredScope: reusa cierres.write a propósito (mismo criterio que
@@ -270,6 +284,29 @@ export class ApiStack extends Stack {
     });
 
     comprobantesPdfBucket.grantRead(consultaComprobante.fn);
+
+    // --- consulta-comprobante: GET /comprobantes/consulta (v1.79) -------------
+    // Descarga masiva por RUC emisor + documento del receptor + periodo
+    // (año+mes siempre requeridos -- nunca se expone "todo el año", ver la
+    // nota de cabecera de ConsultaComprobantePeriodoInput.ts). Mismo scope
+    // que el lookup individual (comprobantes.read) y mismo bucket -- necesita
+    // grantReadWrite (lee los PDFs originales, escribe el .zip generado bajo
+    // `_zips/`, ver la lifecycleRule junto a la definición del bucket).
+    const comprobantesConsultaPeriodo = comprobantes.addResource('consulta');
+    const consultaComprobantesPeriodo = new AuthenticatedEndpoint(this, 'ConsultaComprobantesPeriodo', {
+      api,
+      authorizer,
+      resource: comprobantesConsultaPeriodo,
+      method: 'GET',
+      entry: entryPeriodoDe('consulta-comprobante'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/comprobantes.read',
+      environment: { COMPROBANTES_PDF_BUCKET_NAME: comprobantesPdfBucket.bucketName },
+      timeout: Duration.seconds(28), // ver nota de cabecera del bucket -- 29s es el límite duro de API Gateway REST, 28s deja 1s de margen
+    });
+
+    comprobantesPdfBucket.grantReadWrite(consultaComprobantesPeriodo.fn);
 
     // --- consulta-cierres: GET /cierres-turno + GET /cierres-dia ---------------
     // Un solo Lambda para las 2 rutas de listado (sección 4.1) — la segunda
@@ -617,7 +654,11 @@ export class ApiStack extends Stack {
     // la nota grande de arriba) y agrega `generarReporteDiaDocumento` --
     // ese SÍ necesita `grantDataApiAccess`, pero se le da directo junto a su
     // definición más arriba (no es un `AuthenticatedEndpoint`, no calza en
-    // este loop que itera `.fn` de ese Construct).
+    // este loop que itera `.fn` de ese Construct). v1.79 agrega
+    // `consultaComprobantesPeriodo` (GET /comprobantes/consulta) con el
+    // mismo criterio que ingestComprobantePdf/consultaComprobante -- tampoco
+    // toca Aurora, su único grant es `comprobantesPdfBucket.grantReadWrite(...)`,
+    // ya hecho junto a su definición más arriba.
 
     for (const endpoint of [
       ingestCierreTurno,
