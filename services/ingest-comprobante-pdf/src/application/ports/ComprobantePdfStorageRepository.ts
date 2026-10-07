@@ -7,6 +7,10 @@
 // v1.72: `guardar` ahora tambien recibe `metadata` (opcional, ver
 // ComprobantePdfInput.ts) para que el adaptador la adjunte como S3 object
 // metadata.
+//
+// v1.79: `guardar` tambien recibe `numeroDocumentoReceptor`+`fechaEmision`
+// -- estructurales para la key nueva (ver S3ComprobantePdfStorageRepository.ts
+// y la nota de cabecera de ComprobantePdfInput.ts).
 
 import type { ComprobanteMetadata } from '../../domain/ComprobantePdfInput';
 
@@ -17,6 +21,8 @@ export interface ComprobantePdfGuardadoDTO {
 export interface ComprobantePdfStorageRepository {
   guardar(params: {
     readonly ruc: string;
+    readonly numeroDocumentoReceptor: string;
+    readonly fechaEmision: string;
     readonly numeracion: string;
     readonly buffer: Buffer;
     readonly metadata: ComprobanteMetadata;

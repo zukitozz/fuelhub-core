@@ -24,7 +24,7 @@ export class GuardarComprobantePdf {
     numeracion: string | undefined,
     input: ComprobantePdfInput
   ): Promise<ComprobantePdfGuardadoResultado> {
-    const { buffer, metadata } = validarYDecodificarComprobantePdf(input, numeracion);
+    const { buffer, ruc, numeroDocumentoReceptor, fechaEmision, metadata } = validarYDecodificarComprobantePdf(input, numeracion);
 
     // Autorizacion por estacion (5.4): nunca se confia en que el payload
     // diga la verdad por si solo -- se compara contra custom:station_scope
@@ -36,7 +36,9 @@ export class GuardarComprobantePdf {
     }
 
     const { key } = await this.repo.guardar({
-      ruc: input.ruc,
+      ruc,
+      numeroDocumentoReceptor,
+      fechaEmision,
       numeracion: numeracion!,
       buffer,
       metadata,

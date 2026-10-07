@@ -12,7 +12,9 @@ function inputValido(overrides: Partial<ComprobantePdfInput> = {}): ComprobanteP
   return {
     codigoEstacion: 'CHANCAYLLO',
     ruc: '20123456789',
+    numeroDocumentoReceptor: '10456789123',
     contentBase64: pdfBase64(),
+    fechaEmision: '2026-09-10',
     ...overrides,
   };
 }
@@ -23,14 +25,29 @@ describe('validarYDecodificarComprobantePdf', () => {
     expect(buffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
   });
 
-  it('devuelve metadata vacia cuando no se manda ninguno de los campos opcionales', () => {
-    const { metadata } = validarYDecodificarComprobantePdf(inputValido(), 'F001-000123');
-    expect(metadata).toEqual({
-      fechaEmision: undefined,
+  it('devuelve ruc/numeroDocumentoReceptor/fechaEmision normalizados junto con metadata vacia cuando no se manda ningun campo opcional (v1.79)', () => {
+    const resultado = validarYDecodificarComprobantePdf(inputValido(), 'F001-000123');
+    expect(resultado.ruc).toBe('20123456789');
+    expect(resultado.numeroDocumentoReceptor).toBe('10456789123');
+    expect(resultado.fechaEmision).toBe('2026-09-10');
+    expect(resultado.metadata).toEqual({
+      fechaEmision: '2026-09-10',
       importeTotal: undefined,
       moneda: undefined,
       estadoSunat: undefined,
     });
+  });
+
+  it('rechaza cuando falta numeroDocumentoReceptor (v1.79)', () => {
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ numeroDocumentoReceptor: '' }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('rechaza cuando falta fechaEmision (v1.79, antes era opcional)', () => {
+    expect(() =>
+      validarYDecodificarComprobantePdf(inputValido({ fechaEmision: '' as unknown as string }), 'F001-000123')
+    ).toThrow(ParametrosInvalidosError);
   });
 
   it('rechaza cuando falta numeracion (path)', () => {
@@ -89,7 +106,7 @@ describe('validarYDecodificarComprobantePdf', () => {
     expect(() => validarYDecodificarComprobantePdf(inputValido({ contentBase64: exacto }), 'F001-000123')).not.toThrow();
   });
 
-  it('acepta y normaliza los 4 campos de metadata opcional cuando vienen validos (v1.72)', () => {
+  it('acepta y normaliza fechaEmision + los 3 campos de metadata opcional cuando vienen validos (v1.72)', () => {
     const { metadata } = validarYDecodificarComprobantePdf(
       inputValido({ fechaEmision: '2026-09-10', importeTotal: 125.5, moneda: 'pen', estadoSunat: '  ACEPTADO  ' }),
       'F001-000123'

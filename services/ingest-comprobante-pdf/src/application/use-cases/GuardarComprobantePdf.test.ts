@@ -10,20 +10,37 @@ function authDe(stationScope: string): AuthContext {
 
 function inputValido(overrides: Partial<ComprobantePdfInput> = {}): ComprobantePdfInput {
   const pdf = Buffer.from('%PDF-1.4\n%%EOF').toString('base64');
-  return { codigoEstacion: 'CHANCAYLLO', ruc: '20123456789', contentBase64: pdf, ...overrides };
+  return {
+    codigoEstacion: 'CHANCAYLLO',
+    ruc: '20123456789',
+    numeroDocumentoReceptor: '10456789123',
+    contentBase64: pdf,
+    fechaEmision: '2026-09-10',
+    ...overrides,
+  };
 }
 
 class RepoFake implements ComprobantePdfStorageRepository {
-  readonly llamadas: Array<{ ruc: string; numeracion: string; buffer: Buffer; metadata: ComprobanteMetadata }> = [];
+  readonly llamadas: Array<{
+    ruc: string;
+    numeroDocumentoReceptor: string;
+    fechaEmision: string;
+    numeracion: string;
+    buffer: Buffer;
+    metadata: ComprobanteMetadata;
+  }> = [];
 
   async guardar(params: {
     ruc: string;
+    numeroDocumentoReceptor: string;
+    fechaEmision: string;
     numeracion: string;
     buffer: Buffer;
     metadata: ComprobanteMetadata;
   }): Promise<ComprobantePdfGuardadoDTO> {
     this.llamadas.push(params);
-    return { key: `${params.ruc}/${params.numeracion}.pdf` };
+    const [anio, mes, dia] = params.fechaEmision.split('-');
+    return { key: `${params.ruc}/${params.numeroDocumentoReceptor}/${anio}/${mes}/${dia}/${params.numeracion}.pdf` };
   }
 }
 
@@ -46,12 +63,14 @@ describe('GuardarComprobantePdf', () => {
 
     expect(repo.llamadas).toHaveLength(1);
     expect(repo.llamadas[0]?.ruc).toBe('20123456789');
+    expect(repo.llamadas[0]?.numeroDocumentoReceptor).toBe('10456789123');
+    expect(repo.llamadas[0]?.fechaEmision).toBe('2026-09-10');
     expect(repo.llamadas[0]?.numeracion).toBe('F001-000123');
     expect(repo.llamadas[0]?.buffer.subarray(0, 5).toString('ascii')).toBe('%PDF-');
     expect(resultado).toEqual({
       codigoEstacion: 'CHANCAYLLO',
       numeracion: 'F001-000123',
-      key: '20123456789/F001-000123.pdf',
+      key: '20123456789/10456789123/2026/09/10/F001-000123.pdf',
     });
   });
 
@@ -60,7 +79,7 @@ describe('GuardarComprobantePdf', () => {
     const caso = new GuardarComprobantePdf(repo);
 
     const resultado = await caso.ejecutar(authDe('*'), 'F001-000123', inputValido());
-    expect(resultado.key).toBe('20123456789/F001-000123.pdf');
+    expect(resultado.key).toBe('20123456789/10456789123/2026/09/10/F001-000123.pdf');
   });
 
   it('pasa la metadata opcional normalizada al repo cuando viene en el payload (v1.72)', async () => {
@@ -81,14 +100,14 @@ describe('GuardarComprobantePdf', () => {
     });
   });
 
-  it('pasa metadata con todos los campos undefined cuando el payload no trae ninguno', async () => {
+  it('pasa metadata con solo fechaEmision (requerida desde v1.79) cuando el payload no trae los demas campos opcionales', async () => {
     const repo = new RepoFake();
     const caso = new GuardarComprobantePdf(repo);
 
     await caso.ejecutar(authDe('*'), 'F001-000123', inputValido());
 
     expect(repo.llamadas[0]?.metadata).toEqual({
-      fechaEmision: undefined,
+      fechaEmision: '2026-09-10',
       importeTotal: undefined,
       moneda: undefined,
       estadoSunat: undefined,
