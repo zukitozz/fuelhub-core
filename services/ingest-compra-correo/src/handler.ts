@@ -8,14 +8,24 @@
 // v1.78), aunque ese lo dispara un evento de negocio y este un cron.
 //
 // v1.82 -- ya NO hay un único buzón de Gmail compartido por todo el grupo.
-// Cada corrida empieza preguntándole a la base `listarConfiguracionesCorreoActivas()`
-// (tabla `estaciones_correo_proveedores`, migración 1788800000000) qué
-// combinaciones (secreto de Gmail, etiqueta) hay que sondear -- eso
-// reemplaza la variable de entorno fija `GMAIL_CREDENTIALS_SECRET_ARN` que
-// existía hasta v1.81. Dos o más estaciones pueden compartir el mismo
-// secreto (mismo buzón físico) con etiquetas distintas -- por eso primero
-// se DEDUPLICA por (nombreSecreto, etiqueta) antes de sondear Gmail, así
-// nunca se lee el mismo buzón+etiqueta dos veces en la misma corrida.
+// Cada corrida consulta qué combinaciones (secreto de Gmail, etiqueta) hay
+// que sondear -- eso reemplaza la variable de entorno fija
+// `GMAIL_CREDENTIALS_SECRET_ARN` que existía hasta v1.81. Dos o más
+// estaciones pueden compartir el mismo secreto (mismo buzón físico) con
+// etiquetas distintas -- por eso primero se DEDUPLICA por (nombreSecreto,
+// etiqueta) antes de sondear Gmail, así nunca se lee el mismo buzón+etiqueta
+// dos veces en la misma corrida.
+//
+// v1.84 -- esa config YA NO sale de Postgres (hasta v1.83 vivía en la tabla
+// `estaciones_correo_proveedores`, vía `repo.listarConfiguracionesCorreoActivas()`).
+// Hallazgo real de Jorge: eso obligaba a tocar Aurora INCONDICIONALMENTE en
+// cada corrida del cron (cada 30 min en prod), ANTES de siquiera mirar
+// Gmail -- con Aurora Serverless v2 en `minCapacity 0`, cada corrida pagaba
+// el costo completo de "despertarla" solo para leer 4 filas que casi nunca
+// cambian. Ahora se importa directo como código versionado
+// (`config/estacionesCorreoProveedores.ts`) -- Aurora recién se toca más
+// abajo, dentro de `casoDeUso.ejecutar(...)`, y SOLO si Gmail de verdad
+// tiene algún mensaje pendiente que evaluar.
 //
 // Las credenciales de cada secreto se cachean a nivel de módulo por
 // nombre de secreto (sobreviven entre invocaciones "warm" del mismo
@@ -23,13 +33,16 @@
 // handlers) -- si dos estaciones comparten secreto, ese secreto se lee de
 // Secrets Manager UNA sola vez por contenedor, no una vez por estación.
 //
-// Aislamiento de fallas en DOS niveles, no solo uno: (a) una CONFIGURACIÓN
-// que falla (secreto inexistente/revocado, Gmail caído para ese buzón) no
-// tumba las demás configuraciones de la misma corrida -- se loguea y se
-// sigue con la siguiente; (b) dentro de una configuración, un MENSAJE que
-// falla (XML corrupto, estación no reconocida) tampoco tumba los demás
-// mensajes de esa misma configuración -- mismo criterio que ya existía en
-// v1.81, ahora aplicado en dos capas.
+// Aislamiento de fallas en TRES niveles (v1.83 agrega el tercero): (a) una
+// CONFIGURACIÓN que falla (secreto inexistente/revocado, Gmail caído para
+// ese buzón) no tumba las demás configuraciones de la misma corrida -- se
+// loguea y se sigue con la siguiente; (b) dentro de una configuración, un
+// MENSAJE que falla (sin ningún XML adjunto) tampoco tumba los demás
+// mensajes de esa misma configuración; (c) v1.83 -- dentro de un mensaje,
+// una FACTURA que falla (un mensaje puede traer varias, ver la nota de
+// cabecera de FacturaProveedorSourcePort.ts) tampoco tumba las demás
+// facturas del mismo correo -- se procesan todas, y el mensaje se marca
+// `FuelHub/Error` si alguna falló (aunque otras sí hayan registrado bien).
 //
 // Sin Powertools/idempotencia de DynamoDB acá (a diferencia de los
 // Lambdas de ingesta de cierres) -- la idempotencia real de esta
@@ -51,7 +64,7 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 import { ProcesarFacturaProveedorCorreo } from './application/use-cases/ProcesarFacturaProveedorCorreo';
 import { PostgresCompraCorreoRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCompraCorreoRepository';
 import { GmailFacturaProveedorSource, type CredencialesGmail } from './infrastructure/adapters/GmailFacturaProveedorSource';
-import type { ConfiguracionCorreoEstacion } from './application/ports/CompraCorreoRepository';
+import { ESTACIONES_CORREO_PROVEEDORES, type ConfiguracionCorreoEstacion } from './config/estacionesCorreoProveedores';
 
 const auroraConfig: AuroraDataApiConfig = {
   resourceArn: requiredEnv('AURORA_CLUSTER_ARN'),
@@ -108,7 +121,7 @@ function clave(config: Pick<ConfiguracionCorreoEstacion, 'nombreSecretoGmail' | 
 }
 
 export const handler = async (): Promise<{ procesados: number; pendientesLeidos: number; buzonesSondeados: number }> => {
-  const configuraciones = await repo.listarConfiguracionesCorreoActivas();
+  const configuraciones = ESTACIONES_CORREO_PROVEEDORES.filter((config) => config.activo);
 
   const buzonesUnicos = new Map<string, ConfiguracionCorreoEstacion>();
   for (const config of configuraciones) {
@@ -126,19 +139,34 @@ export const handler = async (): Promise<{ procesados: number; pendientesLeidos:
       pendientesLeidos += mensajes.length;
 
       for (const mensaje of mensajes) {
-        try {
-          const resultado = await casoDeUso.ejecutar(mensaje.xmlContenido);
-          await fuente.marcarProcesado(mensaje.mensajeId);
-          procesados += 1;
-          console.log(
-            `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} comprobante=${resultado.numeroComprobante} lineas=${JSON.stringify(resultado.lineas)}`
-          );
-        } catch (err) {
-          await fuente.marcarError(mensaje.mensajeId);
-          console.error(
-            `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} error: ${err instanceof Error ? err.message : String(err)}`
-          );
+        // v1.83 -- un mensaje puede traer varias facturas (varios XML
+        // adjuntos, ver la nota de cabecera de FacturaProveedorSourcePort.ts).
+        // Cada una se procesa por separado (un XML corrupto/de una estación
+        // no reconocida no debe tumbar las demás facturas del MISMO correo,
+        // mismo criterio de aislamiento que ya existía línea por línea
+        // dentro de una sola factura). El mensaje completo solo se marca
+        // `FuelHub/Procesado` si TODAS sus facturas procesaron sin
+        // excepción -- si alguna falló, se marca `FuelHub/Error` aunque
+        // otras hayan registrado bien: las que sí registraron ya quedaron
+        // en la base (protegidas por `existeComprobante`/el índice único),
+        // así que un reintento futuro de este mensaje no las duplica, solo
+        // vuelve a intentar la(s) que fallaron.
+        let huboError = false;
+        for (const xmlContenido of mensaje.xmlContenidos) {
+          try {
+            const resultado = await casoDeUso.ejecutar(xmlContenido);
+            procesados += 1;
+            console.log(
+              `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} comprobante=${resultado.numeroComprobante} lineas=${JSON.stringify(resultado.lineas)}`
+            );
+          } catch (err) {
+            huboError = true;
+            console.error(
+              `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} error: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
         }
+        await (huboError ? fuente.marcarError(mensaje.mensajeId) : fuente.marcarProcesado(mensaje.mensajeId));
       }
     } catch (err) {
       // Una configuración entera que falla (secreto inexistente/revocado,

@@ -39,7 +39,6 @@ import {
 import { conReintentoSiDbEstaResumiendo, type CategoriaProducto } from '@fuelhub/shared-kernel';
 import type {
   CompraCorreoRepository,
-  ConfiguracionCorreoEstacion,
   DatosCompraCorreoAInsertar,
   EstacionPorRuc,
   ProductoActivo,
@@ -127,22 +126,6 @@ export class PostgresCompraCorreoRepository implements CompraCorreoRepository {
     const fila = filas[0];
     if (!fila) throw new Error('El INSERT de compras (correo) no devolvió fila (inesperado).');
     return { id: String(fila.id) };
-  }
-
-  async listarConfiguracionesCorreoActivas(): Promise<readonly ConfiguracionCorreoEstacion[]> {
-    const filas = await this.ejecutar(
-      `SELECT estacion_id, nombre_secreto_gmail, etiqueta_gmail
-       FROM estaciones_correo_proveedores
-       WHERE activo = true`,
-      []
-    );
-    return filas.map((fila) => ({
-      estacionId: String(fila.estacion_id),
-      nombreSecretoGmail: String(fila.nombre_secreto_gmail),
-      // `null` desde la migración 1788900000000 -- ver comentario de
-      // `ConfiguracionCorreoEstacion` en el puerto.
-      etiquetaGmail: fila.etiqueta_gmail === null || fila.etiqueta_gmail === undefined ? null : String(fila.etiqueta_gmail),
-    }));
   }
 
   private async ejecutar(sql: string, parameters: SqlParameter[]): Promise<Record<string, unknown>[]> {

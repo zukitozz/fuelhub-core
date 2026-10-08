@@ -41,14 +41,17 @@
 // sintaxis estándar de búsqueda de Gmail para etiquetas anidadas (el "/"
 // de "FuelHub/Proveedores" es válido tal cual en el operador `label:`).
 //
-// `descargarXmlAdjunto` recorre `payload.parts` recursivamente (un correo
-// real casi siempre es multipart: cuerpo + PDF + XML, y a veces el XML
-// viene comprimido dentro de otro nivel de multipart si el proveedor lo
-// mandó como adjunto de un adjunto) buscando la primera parte cuyo
-// `filename` termine en `.xml`. Si no encuentra ninguna, el mensaje NO
-// entra en la lista de pendientes -- se marca `FuelHub/Error` directo acá
-// (no es un caso que `ProcesarFacturaProveedorCorreo` pueda hacer nada
-// con él: no hay XML que parsear).
+// `descargarXmlAdjuntos` (plural, v1.83 -- ver la nota de cabecera de
+// `FacturaProveedorSourcePort.ts` sobre el hallazgo real) recorre
+// `payload.parts` recursivamente (un correo real casi siempre es
+// multipart: cuerpo + PDF + XML, y a veces el XML viene comprimido dentro
+// de otro nivel de multipart si el proveedor lo mandó como adjunto de un
+// adjunto) juntando TODAS las partes cuyo `filename` termine en `.xml` --
+// un correo puede traer varias facturas, cada una con su propio adjunto.
+// Si no encuentra NINGUNA, el mensaje NO entra en la lista de pendientes --
+// se marca `FuelHub/Error` directo acá (no es un caso que
+// `ProcesarFacturaProveedorCorreo` pueda hacer nada con él: no hay XML que
+// parsear).
 
 import { OAuth2Client } from 'google-auth-library';
 import type { FacturaProveedorSourcePort, MensajeFacturaProveedor } from '../../application/ports/FacturaProveedorSourcePort';
@@ -95,12 +98,12 @@ export class GmailFacturaProveedorSource implements FacturaProveedorSourcePort {
 
     const mensajes: MensajeFacturaProveedor[] = [];
     for (const id of ids) {
-      const xml = await this.descargarXmlAdjunto(id);
-      if (xml === undefined) {
+      const xmls = await this.descargarXmlAdjuntos(id);
+      if (xmls.length === 0) {
         await this.marcarError(id); // ver nota de cabecera -- sin XML no hay nada que procesar
         continue;
       }
-      mensajes.push({ mensajeId: id, xmlContenido: xml });
+      mensajes.push({ mensajeId: id, xmlContenidos: xmls });
     }
     return mensajes;
   }
@@ -128,15 +131,19 @@ export class GmailFacturaProveedorSource implements FacturaProveedorSourcePort {
     return ids;
   }
 
-  private async descargarXmlAdjunto(mensajeId: string): Promise<string | undefined> {
+  private async descargarXmlAdjuntos(mensajeId: string): Promise<string[]> {
     const mensaje = await this.solicitar<GmailMessage>(`${GMAIL_API_BASE}/messages/${mensajeId}?format=full`);
-    const parteXml = buscarParteXml(mensaje.payload);
-    if (!parteXml?.body?.attachmentId) return undefined;
+    const partesXml = buscarPartesXml(mensaje.payload);
 
-    const adjunto = await this.solicitar<{ data: string }>(
-      `${GMAIL_API_BASE}/messages/${mensajeId}/attachments/${parteXml.body.attachmentId}`
-    );
-    return Buffer.from(adjunto.data, 'base64url').toString('utf-8');
+    const contenidos: string[] = [];
+    for (const parte of partesXml) {
+      if (!parte.body?.attachmentId) continue;
+      const adjunto = await this.solicitar<{ data: string }>(
+        `${GMAIL_API_BASE}/messages/${mensajeId}/attachments/${parte.body.attachmentId}`
+      );
+      contenidos.push(Buffer.from(adjunto.data, 'base64url').toString('utf-8'));
+    }
+    return contenidos;
   }
 
   private async agregarEtiqueta(mensajeId: string, nombreEtiqueta: string): Promise<void> {
@@ -186,13 +193,12 @@ export class GmailFacturaProveedorSource implements FacturaProveedorSourcePort {
   }
 }
 
-function buscarParteXml(parte: GmailMessagePart | undefined): GmailMessagePart | undefined {
-  if (!parte) return undefined;
+function buscarPartesXml(parte: GmailMessagePart | undefined): GmailMessagePart[] {
+  if (!parte) return [];
   const esXml = !!parte.filename && parte.filename.toLowerCase().endsWith('.xml');
-  if (esXml && parte.body?.attachmentId) return parte;
+  const encontradas = esXml && parte.body?.attachmentId ? [parte] : [];
   for (const sub of parte.parts ?? []) {
-    const encontrada = buscarParteXml(sub);
-    if (encontrada) return encontrada;
+    encontradas.push(...buscarPartesXml(sub));
   }
-  return undefined;
+  return encontradas;
 }

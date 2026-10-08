@@ -579,17 +579,25 @@ export class ApiStack extends Stack {
     //
     // v1.82 -- multiempresa real: ya NO hay un único secreto de Gmail por
     // grupo/ambiente. Cada estación (o grupo de estaciones que comparten
-    // buzón) tiene el suyo, matriculado en `estaciones_correo_proveedores`
-    // (migración 1788800000000) -- el Lambda descubre EN TIEMPO DE
-    // EJECUCIÓN, consultando esa tabla, qué secretos leer (ver
-    // `handler.ts`). CDK no puede otorgar permisos a secretos que todavía
-    // no existen ni conoce en tiempo de síntesis, así que en vez de
+    // buzón) tiene el suyo. CDK no puede otorgar permisos a secretos que
+    // todavía no existen ni conoce en tiempo de síntesis, así que en vez de
     // importar un secreto puntual y darle `grantRead`, se le da al Lambda
     // un permiso de IAM con un patrón de ARN -- cualquier secreto bajo el
     // prefijo `fuelhubcore/<grupo>/<ambiente>/gmail-proveedores/*` (uno por
     // buzón, creado por `scripts/gmail-oauth-setup.mjs --buzon <slug>`).
-    // Alta de una empresa/buzón nuevo: correr el script con su `--buzon` y
-    // agregar la fila en la base -- CERO cambios de CDK, cero redeploy.
+    //
+    // v1.84 -- qué (secreto, etiqueta) sondear por estación YA NO sale de
+    // una tabla Postgres (`estaciones_correo_proveedores`, migración
+    // 1788800000000, borrada por 1789000000000) -- vive como código
+    // versionado en `services/ingest-compra-correo/src/config/estacionesCorreoProveedores.ts`
+    // (hallazgo real de Jorge: leer esa tabla en Aurora INCONDICIONALMENTE
+    // en cada corrida del cron, antes de mirar Gmail, despertaba Aurora
+    // Serverless v2 -- `minCapacity 0` -- cada 30 min aunque no hubiera
+    // correo nuevo). Alta de una empresa/buzón nuevo pasa a ser: correr el
+    // script con su `--buzon`, agregar la entrada en ese archivo de config,
+    // commit + push -- ya NO es "cero redeploy" como con la tabla (el
+    // pipeline despliega solo a dev y pide aprobación para prod, igual que
+    // cualquier otro cambio de código).
     const ingestCompraCorreo = new NodejsFunction(this, 'IngestCompraCorreoFn', {
       entry: entryDe('ingest-compra-correo'),
       runtime: Runtime.NODEJS_22_X,

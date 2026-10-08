@@ -18,10 +18,20 @@
 // contra duplicados es el índice único de `compras` -- si estas etiquetas
 // se desincronizaran por lo que sea, `existeComprobante`/el índice único
 // igual protegen a la base.
+//
+// `xmlContenidos` (plural, v1.83) -- hallazgo real de Jorge: un correo de
+// proveedor puede traer VARIAS facturas en un solo mensaje (varios adjuntos
+// `.xml`, uno por factura, cada uno típicamente acompañado de su PDF). Hasta
+// v1.82 este campo era `xmlContenido` (singular) y `GmailFacturaProveedorSource`
+// solo bajaba el PRIMER `.xml` que encontraba -- un correo con 10 facturas
+// procesaba 1 y perdía las otras 9 en silencio (el mensaje quedaba marcado
+// `FuelHub/Procesado`, nunca se reintentaba). Un mensaje sin NINGÚN adjunto
+// `.xml` sigue sin entrar en la lista (se marca error directo, ver el
+// adaptador) -- la lista nunca viene vacía para un mensaje incluido acá.
 
 export interface MensajeFacturaProveedor {
   readonly mensajeId: string;
-  readonly xmlContenido: string;
+  readonly xmlContenidos: readonly string[];
 }
 
 export interface FacturaProveedorSourcePort {

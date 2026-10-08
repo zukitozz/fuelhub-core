@@ -46,14 +46,18 @@
 //      documenta esa migración) -- el caso de uso lo trata igual que un
 //      `existeComprobante` que hubiera dado `true`.
 //
-//   5. `listarConfiguracionesCorreoActivas` (v1.82, multiempresa real):
-//      YA NO hay un único buzón compartido por todo el grupo -- cada
-//      estación puede tener su propio buzón (o compartir uno con otra,
-//      distinguiéndose por etiqueta -- confirmado con Jorge), matriculado
-//      en la tabla `estaciones_correo_proveedores` (migración
-//      1788800000000). El composition root (`handler.ts`) usa esto para
-//      saber CUÁLES (secreto, etiqueta) tiene que sondear en cada corrida
-//      -- ya no es un dato fijo en variables de entorno/CDK.
+// [QUITADO en v1.84] Este puerto tenía un quinto método,
+// `listarConfiguracionesCorreoActivas` (v1.82, leía la tabla Postgres
+// `estaciones_correo_proveedores`) -- se sacó de acá porque obligaba a
+// `handler.ts` a tocar Aurora INCONDICIONALMENTE en cada corrida del cron
+// (cada 30 min en prod), antes de siquiera mirar Gmail, solo para leer una
+// config de 4 filas que casi nunca cambia (Aurora Serverless v2 está en
+// `minCapacity 0`, así que cada corrida pagaba el costo completo de
+// "despertarla"). Esa config ahora vive como código versionado en
+// `config/estacionesCorreoProveedores.ts` -- `handler.ts` la importa
+// directo, sin pasar por ningún puerto/adaptador (no hay I/O real que
+// abstraer en un valor constante). Ver esa migración (1789000000000) y el
+// comentario de cabecera del archivo de config nuevo.
 
 import type { CategoriaProducto } from '@fuelhub/shared-kernel';
 
@@ -63,24 +67,6 @@ export type EstadoCompraCorreo = 'ACTIVO' | 'PENDIENTE_REVISION';
 export interface EstacionPorRuc {
   readonly id: string;
   readonly codigo: string;
-}
-
-/**
- * Una fila de `estaciones_correo_proveedores` (v1.82) -- qué buzón/etiqueta
- * sondear para UNA estación. Dos filas pueden repetir el mismo
- * `nombreSecretoGmail` si esas estaciones comparten buzón físico -- lo que
- * las distingue es `etiquetaGmail`, nunca el secreto por sí solo.
- *
- * `etiquetaGmail` es `string | null` desde la migración 1788900000000 --
- * `null` significa "no filtrar por etiqueta, sondear TODO el buzón" (caso
- * de un buzón dedicado exclusivamente a facturas, donde exigir una
- * etiqueta sería un paso manual de más). Un string sigue filtrando por esa
- * etiqueta puntual, igual que antes.
- */
-export interface ConfiguracionCorreoEstacion {
-  readonly estacionId: string;
-  readonly nombreSecretoGmail: string;
-  readonly etiquetaGmail: string | null;
 }
 
 export interface ProductoActivo {
@@ -122,6 +108,4 @@ export interface CompraCorreoRepository {
   existeComprobante(proveedorRuc: string, numeroComprobante: string, numeroLineaComprobante: string): Promise<boolean>;
   /** Lanza `ComprobanteDuplicadoError` -- ver cabecera, punto 4. */
   registrarCompra(datos: DatosCompraCorreoAInsertar): Promise<{ id: string }>;
-  /** Ver cabecera, punto 5 (v1.82). */
-  listarConfiguracionesCorreoActivas(): Promise<readonly ConfiguracionCorreoEstacion[]>;
 }
