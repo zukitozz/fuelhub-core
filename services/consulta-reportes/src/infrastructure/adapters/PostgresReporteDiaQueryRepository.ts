@@ -209,6 +209,60 @@ export class PostgresReporteDiaQueryRepository implements ReporteDiaQueryReposit
     });
   }
 
+  // obtenerTurnoPorId -- v1.85, ver el comentario del método en el puerto.
+  // Mismas 2 queries que listarTurnos (cabecera + productos), pero filtradas
+  // por `ct.id` directo en vez de `ct.cierre_dia_id` -- el turno puede no
+  // estar vinculado a ningún cierre de día todavía (eso pasa recién cuando
+  // cierra el DÍA completo, v1.76/v1.79), así que no se puede llegar acá
+  // pasando por `cierre_dia_id` como hace `listarTurnos`.
+  async obtenerTurnoPorId(cierreTurnoId: string): Promise<ReporteDiaTurnoDTO | null> {
+    const parametros: SqlParameter[] = [{ name: 'cierreTurnoId', value: { stringValue: cierreTurnoId } }];
+
+    const [cabeceras, productos] = await Promise.all([
+      this.ejecutar(
+        `
+          SELECT ct.id, ct.turno, COALESCE(u.nombre, '(sin asignar)') AS empleado,
+                 ct.fecha_inicio, ct.fecha, ct.total
+          FROM cierres_turno ct
+          LEFT JOIN usuarios u   ON u.id = ct.usuario_id
+          WHERE ct.id = CAST(:cierreTurnoId AS uuid)
+            AND ct.estado = 'ACTIVO'
+        `,
+        parametros
+      ),
+      this.ejecutar(
+        `
+          SELECT ctd.producto_id                              AS producto_id,
+                 COALESCE(pm.nombre, ctd.producto_nombre)      AS producto,
+                 COALESCE(ctd.categoria, pm.categoria)          AS categoria,
+                 SUM(COALESCE(ctd.total_cantidad, 0)) AS cantidad_vendida,
+                 SUM(COALESCE(ctd.total_soles, 0))    AS ingresos
+          FROM cierres_turno_detalle ctd
+          JOIN cierres_turno ct          ON ct.id = ctd.cierre_turno_id
+          LEFT JOIN productos_maestro pm ON pm.id = ctd.producto_id
+          WHERE ct.id = CAST(:cierreTurnoId AS uuid)
+            AND ct.estado = 'ACTIVO'
+          GROUP BY ctd.producto_id, COALESCE(pm.nombre, ctd.producto_nombre), COALESCE(ctd.categoria, pm.categoria)
+          ORDER BY ingresos DESC
+        `,
+        parametros
+      ),
+    ]);
+
+    const fila = cabeceras[0];
+    if (fila === undefined) return null;
+
+    return {
+      cierreTurnoId: String(fila.id),
+      turno: fila.turno as ReporteDiaTurnoDTO['turno'],
+      empleado: String(fila.empleado),
+      fechaInicio: String(fila.fecha_inicio),
+      fecha: String(fila.fecha),
+      total: Number(fila.total),
+      productos: productos.map(mapearFilaProducto),
+    };
+  }
+
   private async obtenerCierreDia(parametros: SqlParameter[]): Promise<{ id: string; total: number } | null> {
     // ORDER BY + LIMIT 1 defensivo: `cierres_dia` no tiene un UNIQUE
     // (estacion_id, fecha_negocio) — solo `clave_idempotencia` es única — así

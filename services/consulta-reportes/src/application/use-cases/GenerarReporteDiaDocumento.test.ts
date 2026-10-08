@@ -58,6 +58,11 @@ class RepoFake implements ReporteDiaQueryRepository {
     const estacionCodigo = cierreDiaId.replace(/^cierre-dia-/, '');
     return turnosDe(estacionCodigo);
   }
+
+  async obtenerTurnoPorId(): Promise<ReporteDiaTurnoDTO | null> {
+    // No lo usa GenerarReporteDiaDocumento (eso lo consume GenerarReporteTurnoDocumento.test.ts) -- solo acá para cumplir la interfaz.
+    return null;
+  }
 }
 
 class RendererFake implements ReporteDiaRendererPort {
@@ -79,7 +84,7 @@ class StorageFake implements DocumentoStoragePort {
 }
 
 describe('GenerarReporteDiaDocumento', () => {
-  it('genera y sube el PDF individual de la estación con la key estable {ESTACION}-{fecha}.pdf', async () => {
+  it('genera y sube el PDF individual de la estación con la key estable cierre_dia_{ESTACION}_{fecha}.pdf (v1.85)', async () => {
     const repo = new RepoFake({ CHANCAYLLO: reporteDe('CHANCAYLLO') }, ['CHANCAYLLO']);
     const renderer = new RendererFake();
     const storage = new StorageFake();
@@ -87,7 +92,7 @@ describe('GenerarReporteDiaDocumento', () => {
 
     await caso.ejecutar({ estacionCodigo: 'CHANCAYLLO', fechaNegocio: '2026-09-16' });
 
-    expect(storage.subidas).toContainEqual({ key: 'reportes-dia/CHANCAYLLO-20260916.pdf', contentType: 'application/pdf' });
+    expect(storage.subidas).toContainEqual({ key: 'reportes-dia/cierre_dia_CHANCAYLLO_2026-09-16.pdf', contentType: 'application/pdf' });
     expect(renderer.llamadas[0]).toEqual({
       modo: 'individual',
       estacion: { reporte: reporteDe('CHANCAYLLO'), turnos: turnosDe('CHANCAYLLO') },
@@ -110,7 +115,7 @@ describe('GenerarReporteDiaDocumento', () => {
     await caso.ejecutar({ estacionCodigo: 'MALA', fechaNegocio: '2026-09-16' });
 
     expect(repo.llamoListarActivas).toBe(true);
-    expect(storage.subidas).toContainEqual({ key: 'reportes-dia/CONSOLIDADO-20260916.pdf', contentType: 'application/pdf' });
+    expect(storage.subidas).toContainEqual({ key: 'reportes-dia/cierre_dia_consolidado_2026-09-16.pdf', contentType: 'application/pdf' });
     const consolidado = renderer.llamadas.find((d) => d.modo === 'consolidado');
     expect(consolidado).toEqual({
       modo: 'consolidado',

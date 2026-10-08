@@ -71,6 +71,15 @@ function entryGenerarDocumentoDe(servicio: string): string {
 function entryPeriodoDe(servicio: string): string {
   return path.join(SERVICES_ROOT, servicio, 'src', 'handler-periodo.ts');
 }
+// entryTurnoDocumentoDe / entryGenerarTurnoDocumentoDe -- v1.85, GET
+// /reportes/turno/documento + su Lambda de generación -- mismo criterio que
+// entryDocumentoDe/entryGenerarDocumentoDe arriba (día), pares separados.
+function entryTurnoDocumentoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-turno-documento.ts');
+}
+function entryGenerarTurnoDocumentoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-generar-turno-documento.ts');
+}
 
 export interface ApiStackProps extends StackProps {
   readonly grupoId: string;
@@ -573,6 +582,76 @@ export class ApiStack extends Stack {
         detailType: ['CierreDiaRegistrado'],
       },
       targets: [new targets.LambdaFunction(generarReporteDiaDocumento)],
+    });
+
+    // --- consulta-reportes: GET /reportes/turno/documento (v1.85) --------------
+    // Mismo contrato que /reportes/dia/documento (URL firmada de S3, mismo
+    // scope, mismo bucket) -- pedido nuevo de notificaciones-whatsapp: aviso
+    // por turno, no solo por día. `estacionCodigo` es SIEMPRE obligatorio acá
+    // (ver ObtenerReporteTurnoDocumento.ts) -- no hay modo consolidado, el
+    // dueño del grupo no recibe cierres de turno.
+    const reportesTurno = reportes.addResource('turno');
+    const reportesTurnoDocumento = reportesTurno.addResource('documento');
+
+    const consultaReportesTurnoDocumento = new AuthenticatedEndpoint(this, 'ConsultaReportesTurnoDocumento', {
+      api,
+      authorizer,
+      resource: reportesTurnoDocumento,
+      method: 'GET',
+      entry: entryTurnoDocumentoDe('consulta-reportes'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/cierres.read', // mismo scope que el de día -- mismo cliente M2M de notificaciones-whatsapp ya lo tiene
+      environment: {
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+    });
+
+    reportesDocumentosBucket.grantRead(consultaReportesTurnoDocumento.fn);
+
+    // --- generarReporteTurnoDocumento: Lambda disparado por EventBridge (v1.85) --
+    // Genera y sube a S3 el PDF del turno apenas se registra el cierre --
+    // ver GenerarReporteTurnoDocumento.ts y handler-generar-turno-documento.ts.
+    // Mismo criterio que generarReporteDiaDocumento arriba (pdfkit + el hook
+    // de `.afm` + Aurora), disparado por `CierreTurnoRegistrado` en vez de
+    // `CierreDiaRegistrado`.
+    const generarReporteTurnoDocumento = new NodejsFunction(this, 'GenerarReporteTurnoDocumentoFn', {
+      entry: entryGenerarTurnoDocumentoDe('consulta-reportes'),
+      runtime: Runtime.NODEJS_22_X,
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      timeout: Duration.seconds(20),
+      environment: {
+        ...AURORA_ENV,
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        commandHooks: {
+          beforeBundling(): string[] {
+            return [];
+          },
+          beforeInstall(): string[] {
+            return [];
+          },
+          afterBundling(inputDir: string, outputDir: string): string[] {
+            return [`cp -r "${inputDir}/node_modules/pdfkit/js/data" "${outputDir}/data"`];
+          },
+        },
+      },
+    });
+
+    reportesDocumentosBucket.grantWrite(generarReporteTurnoDocumento);
+    dataStack.cluster.grantDataApiAccess(generarReporteTurnoDocumento);
+
+    new events.Rule(this, 'CierreTurnoRegistradoParaReporteDocumento', {
+      eventBus: notificacionesBus,
+      eventPattern: {
+        source: ['FuelHubCloud'],
+        detailType: ['CierreTurnoRegistrado'],
+      },
+      targets: [new targets.LambdaFunction(generarReporteTurnoDocumento)],
     });
 
     // --- ingestCompraCorreo: Lambda por cron (v1.81, sin ruta de API) ----------

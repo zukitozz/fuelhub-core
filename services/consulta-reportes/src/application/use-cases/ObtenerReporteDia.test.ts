@@ -49,6 +49,11 @@ class RepoFake implements ReporteDiaQueryRepository {
   async listarTurnos(): Promise<import('../ports/ReporteDiaQueryRepository').ReporteDiaTurnoDTO[]> {
     return [];
   }
+  // Mismo criterio que listarTurnos arriba -- agregado solo para cumplir la
+  // interfaz desde que GenerarReporteTurnoDocumento (v1.85) la necesita.
+  async obtenerTurnoPorId(): Promise<import('../ports/ReporteDiaQueryRepository').ReporteDiaTurnoDTO | null> {
+    return null;
+  }
 }
 
 describe('ObtenerReporteDia', () => {

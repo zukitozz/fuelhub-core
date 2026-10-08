@@ -57,6 +57,7 @@ import type {
   ReporteDiaEstacionDocumentoDTO,
   ReporteDiaRendererPort,
 } from '../../application/ports/ReporteDiaDocumentoPorts';
+import type { ReporteTurnoRendererPort } from '../../application/ports/ReporteTurnoDocumentoPorts';
 
 const ETIQUETA_TURNO: Record<ReporteDiaTurnoDTO['turno'], string> = {
   TURNO1: 'Turno 1',
@@ -209,7 +210,7 @@ function dibujarTablaProductos(
   return y;
 }
 
-export class PdfKitReporteDiaRenderer implements ReporteDiaRendererPort {
+export class PdfKitReporteDiaRenderer implements ReporteDiaRendererPort, ReporteTurnoRendererPort {
   async renderizarPdf(datos: ReporteDiaDocumentoDatos): Promise<Buffer> {
     const doc = new PDFDocument({ margin: 50 });
     const chunks: Buffer[] = [];
@@ -228,6 +229,43 @@ export class PdfKitReporteDiaRenderer implements ReporteDiaRendererPort {
         this.renderizarEstacion(doc, estacion);
       }
     }
+
+    doc.end();
+    return finalizado;
+  }
+
+  /**
+   * v1.85 -- PDF de UN turno puntual, pedido nuevo de notificaciones-whatsapp
+   * (GET /v1/reportes/turno/documento). Reusa `dibujarTablaProductos` (misma
+   * tabla que ya se ve dentro del PDF de día, sección "Detalle por turno"),
+   * pero como documento independiente de una sola página -- mismo estilo,
+   * sin el resumen del día ni el desglose de los otros turnos.
+   */
+  async renderizarPdfTurno(estacionCodigo: string, fechaNegocio: string, turno: ReporteDiaTurnoDTO): Promise<Buffer> {
+    const doc = new PDFDocument({ margin: 50 });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const finalizado = new Promise<Buffer>((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+
+    const x = doc.page.margins.left;
+    const ancho = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+    doc.fontSize(18).fillColor('#000000').font('Helvetica-Bold').text(`Reporte de turno -- ${estacionCodigo}`, { underline: true });
+    doc.font('Helvetica');
+    doc.moveDown(0.3);
+    doc.fontSize(11).text(`Fecha de negocio: ${fechaNegocio}`);
+    doc.moveDown();
+
+    const titulo = `${ETIQUETA_TURNO[turno.turno]} -- ${turno.empleado}  (Inicio: ${turno.fechaInicio}  Fin: ${turno.fecha})`;
+    const y = dibujarTablaProductos(doc, x, doc.y, ancho, titulo, turno.productos);
+
+    doc.y = y;
+    doc.moveDown(0.4);
+    doc.fontSize(11).font('Helvetica-Bold').text(`Total del turno: ${formatearMonto(turno.total)}`);
+    doc.font('Helvetica');
 
     doc.end();
     return finalizado;

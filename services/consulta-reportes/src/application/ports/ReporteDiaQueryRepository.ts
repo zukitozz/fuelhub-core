@@ -100,4 +100,17 @@ export interface ReporteDiaQueryRepository {
    * ya resuelto, igual que `obtenerProductos` internamente.
    */
   listarTurnos(cierreDiaId: string): Promise<ReporteDiaTurnoDTO[]>;
+
+  /**
+   * UN `cierres_turno` puntual, por su propio id -- v1.85, usado por
+   * `GenerarReporteTurnoDocumento` (PDF del reporte de turno individual,
+   * pedido de notificaciones-whatsapp). A diferencia de `listarTurnos`
+   * (que cuelga de `cierreDiaId`), este NO puede depender de que el turno
+   * ya esté vinculado a un cierre de día -- el evento `CierreTurnoRegistrado`
+   * se publica al cerrar el TURNO, que normalmente pasa ANTES de que cierre
+   * el día completo (`cierre_dia_id` de ese turno todavía es `NULL` en ese
+   * momento, ver v1.76/v1.79). `null` si el turno no existe o no está
+   * `ACTIVO`.
+   */
+  obtenerTurnoPorId(cierreTurnoId: string): Promise<ReporteDiaTurnoDTO | null>;
 }
