@@ -21,10 +21,13 @@
 //      como el stream que ya devuelve `GetObjectCommand` (nunca se
 //      bufferea un PDF completo en memoria), y la subida a S3 usa
 //      `@aws-sdk/lib-storage` (`Upload`, multipart) alimentada directo del
-//      stream de salida de `archiver` -- tampoco se bufferea el .zip
-//      completo en memoria. La memoria del Lambda queda acotada
-//      independientemente de cuantos comprobantes tenga el mes (dentro del
-//      tope de arriba).
+//      stream de salida de `archiver` -- re-emitido primero por un
+//      `PassThrough` nativo (ver el comentario de `subirZip` mas abajo,
+//      hallazgo real en prod: `archiver` expone un stream que no pasa el
+//      chequeo `instanceof Readable` de `lib-storage`) -- tampoco se
+//      bufferea el .zip completo en memoria. La memoria del Lambda queda
+//      acotada independientemente de cuantos comprobantes tenga el mes
+//      (dentro del tope de arriba).
 //   4. El .zip generado se sube bajo el prefijo `_zips/` del MISMO bucket
 //      de comprobantes (no uno nuevo) -- con una `lifecycleRule` acotada a
 //      ese prefijo (ver api-stack.ts) que lo borra solo a los 2 dias: es un
@@ -36,7 +39,7 @@
 //      comprobantes nuevos). Para meses ya cerrados, cachear quedaria bien
 //      como optimizacion futura -- no implementado en esta entrada.
 
-import type { Readable } from 'node:stream';
+import { PassThrough, type Readable } from 'node:stream';
 import { GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -131,14 +134,33 @@ export class S3ComprobantePeriodoLecturaRepository implements ComprobantePeriodo
     return claves;
   }
 
-  /** Arma el .zip 100% en streaming (ver nota de cabecera, punto 3) y lo sube con Upload (multipart). Devuelve cuantos archivos entraron. */
+  /**
+   * Arma el .zip 100% en streaming (ver nota de cabecera, punto 3) y lo sube
+   * con Upload (multipart). Devuelve cuantos archivos entraron.
+   *
+   * HALLAZGO REAL (CloudWatch, primera prueba en prod, 2026-10-07): pasar
+   * `archivo` (la instancia de `archiver`) directo como `Body` de `Upload`
+   * revienta en runtime con "Body Data is unsupported format" -- `archiver`
+   * arma su cadena de streams sobre el paquete userland `readable-stream`
+   * (para compatibilidad hacia atrás), así que lo que expone NO pasa el
+   * chequeo `instanceof Readable` que hace `@aws-sdk/lib-storage`
+   * internamente contra el `Readable` NATIVO de `node:stream` -- aunque
+   * ambos implementen la misma interfaz. TypeScript no lo detecta (por eso
+   * no se vio en el `tsc --noEmit` del commit anterior): es un problema de
+   * identidad de clase en runtime, no de tipos. Se resuelve re-emitiendo el
+   * zip a través de un `PassThrough` nativo (`node:stream`) antes de
+   * pasarlo a `Upload` -- ese sí es un `Readable` real.
+   */
   private async subirZip(claves: readonly string[], zipKey: string): Promise<number> {
     const archivo = archiver('zip', { zlib: { level: 6 } });
+    const salida = new PassThrough();
+    archivo.on('error', (err) => salida.destroy(err));
+    archivo.pipe(salida);
     const errorDeArchivo = new Promise<never>((_, reject) => archivo.on('error', reject));
 
     const upload = new Upload({
       client: this.client,
-      params: { Bucket: this.bucketName, Key: zipKey, Body: archivo, ContentType: 'application/zip' },
+      params: { Bucket: this.bucketName, Key: zipKey, Body: salida, ContentType: 'application/zip' },
     });
 
     for (const key of claves) {
