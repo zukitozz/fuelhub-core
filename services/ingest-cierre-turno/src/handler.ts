@@ -11,15 +11,21 @@
 // `responseHook` (`downgradeReplayStatusTo200`, `@fuelhub/shared-kernel`)
 // baja el `201` cacheado a `200` solo en ese reintento, tal como pide el
 // contrato (11.2) — ver v1.48.
+//
+// v1.85 -- agrega `EventBridgeCierreTurnoPublisher` (mismo criterio que
+// `ingest-cierre-dia/handler.ts` con `EventBridgeCierreDiaPublisher`) para
+// publicar `CierreTurnoRegistrado`.
 
 import type { Context } from 'aws-lambda';
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
+import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 import { IdempotencyConfig, makeIdempotent } from '@aws-lambda-powertools/idempotency';
 import { DynamoDBPersistenceLayer } from '@aws-lambda-powertools/idempotency/dynamodb';
 import { parseAuthContext, withNormalizedIdempotencyKeyHeader } from '@fuelhub/shared-kernel';
 import { downgradeReplayStatusTo200, jsonResponse, mapErrorToResponse, type ApiResponse } from '@fuelhub/shared-kernel';
 import { RegistrarCierreTurno } from './application/use-cases/RegistrarCierreTurno';
 import { PostgresCierreTurnoIngestaRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCierreTurnoIngestaRepository';
+import { EventBridgeCierreTurnoPublisher } from './infrastructure/adapters/EventBridgeCierreTurnoPublisher';
 import { parsearCierreTurnoInput, type ApiGatewayEventLike } from './infrastructure/http/ApiGatewayRequestMapper';
 
 const config: AuroraDataApiConfig = {
@@ -30,7 +36,11 @@ const config: AuroraDataApiConfig = {
 
 const rdsClient = new RDSDataClient({});
 const repo = new PostgresCierreTurnoIngestaRepository(rdsClient, config);
-const registrarCierreTurno = new RegistrarCierreTurno(repo);
+
+const eventBridgeClient = new EventBridgeClient({});
+const publicadorEventos = new EventBridgeCierreTurnoPublisher(eventBridgeClient, requiredEnv('EVENTBRIDGE_BUS_NAME'));
+
+const registrarCierreTurno = new RegistrarCierreTurno(repo, publicadorEventos);
 
 const persistenceStore = new DynamoDBPersistenceLayer({ tableName: requiredEnv('IDEMPOTENCY_TABLE_NAME') });
 const idempotencyConfig = new IdempotencyConfig({

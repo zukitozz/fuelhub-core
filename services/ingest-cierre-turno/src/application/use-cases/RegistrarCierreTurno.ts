@@ -11,15 +11,35 @@
 // deliberado: es una utilidad de infraestructura (deduplicación de requests
 // HTTP), no parte del modelo de negocio, así que se resuelve envolviendo el
 // handler completo con Lambda Powertools (`handler.ts`), no en este caso de uso.
+//
+// v1.85 -- a partir de ahora, igual que `RegistrarCierreDia.ts`, tras el
+// INSERT confirmado se publica el evento `CierreTurnoRegistrado` a
+// EventBridge en modo "best effort": si la publicación falla, se loguea pero
+// NO se revierte el INSERT ya confirmado ni se propaga el error al cliente
+// (mismo criterio documentado en la sección 4.1 para `CierreDiaRegistrado`).
 
 import { AuthContext, hasAccessToStation } from '@fuelhub/shared-kernel';
 import { AccesoDenegadoEstacionError } from '@fuelhub/shared-kernel';
-import type { CierreTurnoDetalleDTO } from '@fuelhub/shared-kernel';
+import type { CierreTurnoDetalleDTO, Turno } from '@fuelhub/shared-kernel';
 import { validarCierreTurno, type CierreTurnoInput } from '../../domain/CierreTurnoInput';
 import type { CierreTurnoIngestaRepository } from '../ports/CierreTurnoIngestaRepository';
+import type { EventPublisherPort } from '../ports/EventPublisherPort';
+
+const PROYECTO_CODIGO = 'FUELHUBCLOUD'; // mismo valor que RegistrarCierreDia.ts -- confirmado v1.57 contra el contrato real de notificaciones-whatsapp
+
+// Texto legible para el campo `tipo` del evento (v1.85) -- notificaciones-whatsapp
+// lo muestra tal cual en el mensaje, no es un campo de negocio nuestro.
+const TIPO_POR_TURNO: Record<Turno, string> = {
+  TURNO1: 'turno 1',
+  TURNO2: 'turno 2',
+  TURNO3: 'turno 3',
+};
 
 export class RegistrarCierreTurno {
-  constructor(private readonly repo: CierreTurnoIngestaRepository) {}
+  constructor(
+    private readonly repo: CierreTurnoIngestaRepository,
+    private readonly eventos: EventPublisherPort
+  ) {}
 
   async ejecutar(auth: AuthContext, input: CierreTurnoInput): Promise<CierreTurnoDetalleDTO> {
     validarCierreTurno(input);
@@ -31,6 +51,27 @@ export class RegistrarCierreTurno {
       throw new AccesoDenegadoEstacionError(input.codigoEstacion);
     }
 
-    return this.repo.registrar({ ...input, clienteOrigen: auth.clientId });
+    const { dto, estacionId } = await this.repo.registrar({ ...input, clienteOrigen: auth.clientId });
+
+    try {
+      await this.eventos.publicarCierreTurnoRegistrado({
+        proyectoCodigo: PROYECTO_CODIGO,
+        estacionId,
+        estacionCodigo: dto.codigoEstacion,
+        fechaNegocio: dto.fechaNegocio,
+        turno: dto.turno,
+        tipo: TIPO_POR_TURNO[dto.turno],
+        total: dto.total,
+        cierreTurnoId: dto.id,
+      });
+    } catch (errorDePublicacion) {
+      // Best effort a propósito (mismo criterio que RegistrarCierreDia.ts):
+      // el cierre ya quedó grabado en Postgres, que es la fuente de verdad —
+      // una falla de EventBridge no debe convertirse en un 500 para el
+      // sistema del grifo que sí cumplió su parte.
+      console.error('No se pudo publicar CierreTurnoRegistrado a EventBridge:', errorDePublicacion);
+    }
+
+    return dto;
   }
 }

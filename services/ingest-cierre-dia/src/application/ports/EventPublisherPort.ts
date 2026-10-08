@@ -23,6 +23,13 @@ export interface CierreDiaRegistradoEvent {
   readonly fechaNegocio: string;
   readonly total: number;
   readonly cierreDiaId: string;
+  /**
+   * v1.85 -- texto legible, pedido por notificaciones-whatsapp para su
+   * plantilla de mensaje ("Cierre de {{tipo}} registrado..."). Siempre
+   * `'día'` para este evento -- su propio contrato ya asume ese default si
+   * el campo no viniera, pero se manda explícito para no depender de eso.
+   */
+  readonly tipo: string;
 }
 
 export interface EventPublisherPort {

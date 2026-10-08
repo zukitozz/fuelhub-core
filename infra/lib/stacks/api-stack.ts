@@ -134,6 +134,9 @@ export class ApiStack extends Stack {
 
     // --- ingest-cierre-turno: POST /cierres-turno --------------------------------
 
+    // v1.85 -- agrega EVENTBRIDGE_BUS_NAME (publica CierreTurnoRegistrado,
+    // mismo bus/mecanismo que ingestCierreDia más abajo con CierreDiaRegistrado
+    // -- ver EventBridgeCierreTurnoPublisher.ts).
     const ingestCierreTurno = new AuthenticatedEndpoint(this, 'IngestCierreTurno', {
       api,
       authorizer,
@@ -143,7 +146,11 @@ export class ApiStack extends Stack {
       projectRoot: REPO_ROOT,
       depsLockFilePath: DEPS_LOCK_FILE_PATH,
       requiredScope: 'fuelhub-api/cierres.write',
-      environment: { ...AURORA_ENV, IDEMPOTENCY_TABLE_NAME: dataStack.idempotencyTable.tableName },
+      environment: {
+        ...AURORA_ENV,
+        IDEMPOTENCY_TABLE_NAME: dataStack.idempotencyTable.tableName,
+        EVENTBRIDGE_BUS_NAME: notificacionesBus.eventBusName,
+      },
     });
 
     // --- ingest-cierre-dia: POST /cierres-dia ------------------------------------
@@ -684,6 +691,7 @@ export class ApiStack extends Stack {
     dataStack.idempotencyTable.grantReadWriteData(ingestCierreDia.fn);
 
     notificacionesBus.grantPutEventsTo(ingestCierreDia.fn);
+    notificacionesBus.grantPutEventsTo(ingestCierreTurno.fn); // v1.85 -- CierreTurnoRegistrado
 
     // ApiUrl -- v1.51, agregado para que `scripts/smoke-test.mjs` (12.3/12.6)
     // pueda descubrir la URL real del API Gateway por CloudFormation en vez

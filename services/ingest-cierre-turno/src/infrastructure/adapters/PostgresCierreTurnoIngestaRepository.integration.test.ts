@@ -64,10 +64,11 @@ describe('PostgresCierreTurnoIngestaRepository (integración real, sin mocks)', 
       ],
     };
 
-    const registrado = await ingestaRepo.registrar(datos);
+    const { dto: registrado, estacionId } = await ingestaRepo.registrar(datos);
     idCreado = registrado.id;
 
     expect(registrado.codigoEstacion).toBe(estacion.codigo);
+    expect(estacionId).toBe(estacion.id);
     expect(registrado.total).toBe(150.5);
     expect(registrado.pagos).toHaveLength(1);
     expect(registrado.detalle).toHaveLength(1);

@@ -58,7 +58,7 @@ export interface AuroraDataApiConfig {
 export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaRepository {
   constructor(private readonly client: RDSDataClient, private readonly config: AuroraDataApiConfig) {}
 
-  async registrar(datos: DatosCierreTurnoAInsertar): Promise<CierreTurnoDetalleDTO> {
+  async registrar(datos: DatosCierreTurnoAInsertar): Promise<{ dto: CierreTurnoDetalleDTO; estacionId: string }> {
     const inicio = await conReintentoSiDbEstaResumiendo(() => this.client.send(
       new BeginTransactionCommand({
         resourceArn: this.config.resourceArn,
@@ -97,7 +97,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
         })
       ));
 
-      return {
+      const dto: CierreTurnoDetalleDTO = {
         id: cabecera.id,
         codigoEstacion: datos.codigoEstacion,
         isla: datos.isla ?? null,
@@ -115,6 +115,7 @@ export class PostgresCierreTurnoIngestaRepository implements CierreTurnoIngestaR
         pagos,
         detalle,
       };
+      return { dto, estacionId };
     } catch (err) {
       await this.client
         .send(

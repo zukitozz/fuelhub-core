@@ -69,7 +69,7 @@ describe('PostgresCierreDiaIngestaRepository (integración real, sin mocks)', ()
       pagos: [{ medio: 'efectivo', monto: 150.5 }],
       detalle: [],
     };
-    const turnoRegistrado = await turnoRepo.registrar(datosTurno);
+    const { dto: turnoRegistrado } = await turnoRepo.registrar(datosTurno);
     idTurnoCreado = turnoRegistrado.id;
 
     const datos: DatosCierreDiaAInsertar = {

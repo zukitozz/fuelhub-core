@@ -42,6 +42,7 @@ export class RegistrarCierreDia {
         fechaNegocio: dto.fechaNegocio,
         total: dto.total,
         cierreDiaId: dto.id,
+        tipo: 'día', // v1.85, ver EventPublisherPort.ts
       });
     } catch (errorDePublicacion) {
       // Best effort a propósito (sección 4.1): el cierre ya quedó grabado en

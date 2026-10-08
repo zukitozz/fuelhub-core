@@ -30,6 +30,11 @@ export interface CierreTurnoIngestaRepository {
    * campo, misma forma que `components.schemas.Error` del contrato OpenAPI)
    * si `codigoEstacion` no existe, si algún `productoId` no está en el
    * catálogo activo, o si `empleado.codigo` ya pertenece a otra estación.
+   *
+   * Devuelve también `estacionId` (el UUID interno, no solo `codigoEstacion`)
+   * -- mismo criterio que `CierreDiaIngestaRepository.registrar` (v1.57): el
+   * evento `CierreTurnoRegistrado` (v1.85) lo necesita en su `detail` y el
+   * caso de uso no tiene otra forma de obtenerlo sin una segunda consulta.
    */
-  registrar(datos: DatosCierreTurnoAInsertar): Promise<CierreTurnoDetalleDTO>;
+  registrar(datos: DatosCierreTurnoAInsertar): Promise<{ dto: CierreTurnoDetalleDTO; estacionId: string }>;
 }

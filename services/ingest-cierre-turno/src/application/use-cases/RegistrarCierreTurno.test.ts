@@ -12,7 +12,10 @@ import type { AuthContext } from '@fuelhub/shared-kernel';
 import type { CierreTurnoDetalleDTO } from '@fuelhub/shared-kernel';
 import type { CierreTurnoInput } from '../../domain/CierreTurnoInput';
 import type { CierreTurnoIngestaRepository, DatosCierreTurnoAInsertar } from '../ports/CierreTurnoIngestaRepository';
+import type { CierreTurnoRegistradoEvent, EventPublisherPort } from '../ports/EventPublisherPort';
 import { RegistrarCierreTurno } from './RegistrarCierreTurno';
+
+const ESTACION_ID_FAKE = 'estacion-id-fake';
 
 function fakeRepo(): CierreTurnoIngestaRepository & { llamadas: DatosCierreTurnoAInsertar[] } {
   const llamadas: DatosCierreTurnoAInsertar[] = [];
@@ -50,7 +53,19 @@ function fakeRepo(): CierreTurnoIngestaRepository & { llamadas: DatosCierreTurno
           categoria: linea.categoria ?? null,
         })),
       };
-      return dto;
+      return { dto, estacionId: ESTACION_ID_FAKE };
+    },
+  };
+}
+
+function fakeEventos(): EventPublisherPort & { eventos: CierreTurnoRegistradoEvent[]; fallarSiempre?: boolean } {
+  const eventos: CierreTurnoRegistradoEvent[] = [];
+  return {
+    eventos,
+    fallarSiempre: false,
+    async publicarCierreTurnoRegistrado(evento) {
+      if (this.fallarSiempre) throw new Error('EventBridge caído (fake)');
+      eventos.push(evento);
     },
   };
 }
@@ -76,7 +91,8 @@ function auth(stationScope: string): AuthContext {
 describe('RegistrarCierreTurno', () => {
   it('delega al repositorio con clienteOrigen tomado del token cuando el token tiene acceso a la estación', async () => {
     const repo = fakeRepo();
-    const caso = new RegistrarCierreTurno(repo);
+    const eventos = fakeEventos();
+    const caso = new RegistrarCierreTurno(repo, eventos);
 
     const resultado = await caso.ejecutar(auth('CHANCAYLLO'), inputValido());
 
@@ -86,26 +102,61 @@ describe('RegistrarCierreTurno', () => {
     expect(resultado.id).toBe('fake-id');
   });
 
+  it('publica CierreTurnoRegistrado con estacionId/tipo legible tras el registro (v1.85)', async () => {
+    const repo = fakeRepo();
+    const eventos = fakeEventos();
+    const caso = new RegistrarCierreTurno(repo, eventos);
+
+    await caso.ejecutar(auth('CHANCAYLLO'), inputValido());
+
+    expect(eventos.eventos).toEqual([
+      {
+        proyectoCodigo: 'FUELHUBCLOUD',
+        estacionId: ESTACION_ID_FAKE,
+        estacionCodigo: 'CHANCAYLLO',
+        fechaNegocio: '2026-08-22',
+        turno: 'TURNO1',
+        tipo: 'turno 1',
+        total: 500,
+        cierreTurnoId: 'fake-id',
+      },
+    ]);
+  });
+
+  it('no propaga el error si falla la publicación del evento -- best effort, igual que RegistrarCierreDia', async () => {
+    const repo = fakeRepo();
+    const eventos = fakeEventos();
+    eventos.fallarSiempre = true;
+    const caso = new RegistrarCierreTurno(repo, eventos);
+
+    const resultado = await caso.ejecutar(auth('CHANCAYLLO'), inputValido());
+
+    expect(resultado.id).toBe('fake-id'); // el cierre se registró igual
+    expect(eventos.eventos).toHaveLength(0);
+  });
+
   it('permite el registro cuando el token trae wildcard "*"', async () => {
     const repo = fakeRepo();
-    const caso = new RegistrarCierreTurno(repo);
+    const caso = new RegistrarCierreTurno(repo, fakeEventos());
     await expect(caso.ejecutar(auth('*'), inputValido())).resolves.toBeDefined();
   });
 
-  it('rechaza con AccesoDenegadoEstacionError sin llamar al repositorio si el token es de otra estación (sección 5.4)', async () => {
+  it('rechaza con AccesoDenegadoEstacionError sin llamar al repositorio ni publicar evento si el token es de otra estación (sección 5.4)', async () => {
     const repo = fakeRepo();
-    const caso = new RegistrarCierreTurno(repo);
+    const eventos = fakeEventos();
+    const caso = new RegistrarCierreTurno(repo, eventos);
 
     await expect(caso.ejecutar(auth('MALA'), inputValido())).rejects.toMatchObject({
       name: 'AccesoDenegadoEstacionError',
       estacionSolicitada: 'CHANCAYLLO',
     });
     expect(repo.llamadas).toHaveLength(0);
+    expect(eventos.eventos).toHaveLength(0);
   });
 
   it('rechaza con ParametrosInvalidosError sin llamar al repositorio si el payload es estructuralmente inválido, incluso con acceso correcto a la estación', async () => {
     const repo = fakeRepo();
-    const caso = new RegistrarCierreTurno(repo);
+    const caso = new RegistrarCierreTurno(repo, fakeEventos());
 
     const payloadInvalido = { ...inputValido(), pagos: [] };
 
