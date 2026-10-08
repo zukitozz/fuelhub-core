@@ -76,6 +76,16 @@ export interface CompraOutputDTO {
   readonly costoUnitario: number;
   readonly costoTotal: number;
   readonly numeroGuia: string | null;
+  /**
+   * v1.85 -- identificador de la factura electrónica del proveedor
+   * (serie-correlativo), SOLO presente en compras que entraron por el flujo
+   * de correo (`ingest-compra-correo`, migración 1788600000000) -- `null`
+   * para compras manuales (`POST /compras` no tiene este campo en su
+   * contrato, nunca lo pide). Hasta ahora se guardaba (como clave interna
+   * anti-duplicados) pero no se exponía en ningún GET -- hallazgo real de
+   * Jorge.
+   */
+  readonly numeroComprobante: string | null;
   readonly destinos: readonly CompraDestinoDTO[];
   /** `cantidad - suma(destinos[].cantidad)` -- `null` si no hay ningún destino registrado (v1.66). */
   readonly merma: number | null;

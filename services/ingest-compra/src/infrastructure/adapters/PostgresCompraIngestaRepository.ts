@@ -133,6 +133,7 @@ interface FilaCompra {
   readonly costoUnitario: number;
   readonly costoTotal: number;
   readonly numeroGuia: string | null;
+  readonly numeroComprobante: string | null;
   readonly estado: EstadoCompra;
   readonly creadoEn: string;
 }
@@ -140,7 +141,7 @@ interface FilaCompra {
 const SELECT_COMPRA = `
   SELECT c.id, e.codigo AS codigo_estacion, c.producto_id, c.producto_nombre, c.categoria,
          c.proveedor, c.fecha, c.cantidad, c.costo_unitario, c.costo_total, c.numero_guia,
-         c.estado, c.creado_en
+         c.numero_comprobante, c.estado, c.creado_en
   FROM compras c
   JOIN estaciones e ON e.id = c.estacion_id
 `;
@@ -204,6 +205,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         costoUnitario: datos.costoUnitario,
         costoTotal: cabecera.costoTotal,
         numeroGuia: datos.numeroGuia ?? null,
+        numeroComprobante: null, // flujo manual (POST /compras) nunca lo trae -- ver nota de CompraIngestaRepository.ts
         destinos,
         merma: calcularMerma(datos.cantidad, destinos),
         estado: 'ACTIVO',
@@ -352,7 +354,7 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
                  WHERE c.estacion_id = e.id AND c.id = CAST(:id AS uuid)
                  RETURNING c.id, e.codigo AS codigo_estacion, c.producto_id, c.producto_nombre, c.categoria,
                            c.proveedor, c.fecha, c.cantidad, c.costo_unitario, c.costo_total, c.numero_guia,
-                           c.estado, c.creado_en`,
+                           c.numero_comprobante, c.estado, c.creado_en`,
                 parametros,
                 transactionId
               )
@@ -606,6 +608,7 @@ function mapearFilaCompra(fila: Record<string, unknown>): FilaCompra {
     costoUnitario: Number(fila.costo_unitario),
     costoTotal: Number(fila.costo_total),
     numeroGuia: fila.numero_guia === null || fila.numero_guia === undefined ? null : String(fila.numero_guia),
+    numeroComprobante: fila.numero_comprobante === null || fila.numero_comprobante === undefined ? null : String(fila.numero_comprobante),
     estado: fila.estado as EstadoCompra,
     creadoEn: String(fila.creado_en),
   };
@@ -643,6 +646,7 @@ function mapearCompraCompleta(compra: FilaCompra, destinos: readonly CompraDesti
     costoUnitario: compra.costoUnitario,
     costoTotal: compra.costoTotal,
     numeroGuia: compra.numeroGuia,
+    numeroComprobante: compra.numeroComprobante,
     destinos,
     merma: calcularMerma(compra.cantidad, destinos),
     estado: compra.estado,

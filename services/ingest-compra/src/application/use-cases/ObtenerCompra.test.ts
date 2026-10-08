@@ -34,6 +34,7 @@ function compraDeEjemplo(overrides: Partial<CompraOutputDTO> = {}): CompraOutput
     costoUnitario: 14.25,
     costoTotal: 42750,
     numeroGuia: 'T001-000123',
+    numeroComprobante: null,
     destinos: [],
     merma: null,
     estado: 'ACTIVO',
@@ -93,5 +94,25 @@ describe('ObtenerCompra', () => {
     const resultado = await useCase.ejecutar(auth({ stationScope: '*' }), 'c1c1c1c1-0000-0000-0000-000000000000');
 
     expect(resultado.codigoEstacion).toBe('PACHACUTEC');
+  });
+
+  // v1.85 -- hallazgo real de Jorge: numeroComprobante se guardaba (compras
+  // que entraron por correo) pero nunca se exponía en este GET.
+  it('devuelve numeroComprobante cuando la compra entró por el flujo de correo', async () => {
+    const repo = new RepoFake(compraDeEjemplo({ numeroComprobante: 'F001-000123' }));
+    const useCase = new ObtenerCompra(repo);
+
+    const resultado = await useCase.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), 'c1c1c1c1-0000-0000-0000-000000000000');
+
+    expect(resultado.numeroComprobante).toBe('F001-000123');
+  });
+
+  it('devuelve numeroComprobante en null para una compra manual', async () => {
+    const repo = new RepoFake(compraDeEjemplo());
+    const useCase = new ObtenerCompra(repo);
+
+    const resultado = await useCase.ejecutar(auth({ stationScope: 'CHANCAYLLO' }), 'c1c1c1c1-0000-0000-0000-000000000000');
+
+    expect(resultado.numeroComprobante).toBeNull();
   });
 });

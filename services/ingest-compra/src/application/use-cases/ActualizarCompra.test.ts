@@ -36,6 +36,7 @@ function compraDeEjemplo(overrides: Partial<CompraOutputDTO> = {}): CompraOutput
     costoUnitario: 14.25,
     costoTotal: 42750,
     numeroGuia: 'T001-000123',
+    numeroComprobante: null,
     destinos: [],
     merma: null,
     estado: 'ACTIVO',

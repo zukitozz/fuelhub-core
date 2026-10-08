@@ -594,6 +594,15 @@ components:
         numeroGuia:
           type: string
           nullable: true
+        numeroComprobante:
+          type: string
+          nullable: true
+          description: >
+            Identificador de la factura electrónica del proveedor
+            (serie-correlativo), v1.85 -- SOLO presente en compras que
+            entraron por el flujo de lectura de correo de proveedores; `null`
+            para compras registradas manualmente (`POST /compras` no acepta
+            este campo).
         destinos:
           type: array
           items:
