@@ -44,11 +44,31 @@ describe('matchearProducto', () => {
     expect(matchearProducto('GALLETAS SODA FIELD X 6 UND', CATALOGO)).toBeUndefined();
   });
 
-  it('no matchea si la descripción calza con más de un producto a la vez (ambiguo) -- devuelve undefined', () => {
-    expect(matchearProducto('DIESEL Y PREMIUM MIXTO', CATALOGO)).toBeUndefined();
+  it('no matchea si la descripción calza con más de un producto a la vez y no es el caso diésel+gasolina -- devuelve undefined', () => {
+    expect(matchearProducto('GLP Y PREMIUM MIXTO', CATALOGO)).toBeUndefined();
   });
 
   it('catálogo vacío -- nunca matchea', () => {
     expect(matchearProducto('DIESEL B5', [])).toBeUndefined();
+  });
+
+  // v1.85 -- hallazgo real de Jorge: su proveedor factura el diésel como
+  // "DIESEL B5 S-50 UV PREMIUM", que matchea Diésel (keyword DIESEL/B5) Y
+  // Premium (keyword PREMIUM literal) a la vez -- "PREMIUM" ahí es un
+  // calificativo del diésel (aditivado/UV), no octanaje de gasolina.
+  it('DIESEL gana cuando matchea junto con PREMIUM (grado comercial del diésel, no gasolina) -- caso real del proveedor', () => {
+    expect(matchearProducto('DIESEL B5 S-50 UV PREMIUM', CATALOGO)?.id).toBe('id-diesel');
+  });
+
+  it('DIESEL gana cuando matchea junto con REGULAR, mismo criterio', () => {
+    expect(matchearProducto('DIESEL B5 S-50 REGULAR', CATALOGO)?.id).toBe('id-diesel');
+  });
+
+  it('DIESEL gana cuando matchea junto con PREMIUM y REGULAR a la vez', () => {
+    expect(matchearProducto('DIESEL B5 S-50 UV PREMIUM REGULAR', CATALOGO)?.id).toBe('id-diesel');
+  });
+
+  it('sigue ambiguo si DIESEL matchea junto con algo que NO sea PREMIUM/REGULAR (ej. GLP) -- no se fuerza un ganador', () => {
+    expect(matchearProducto('DIESEL B5 Y GLP MIXTO', CATALOGO)).toBeUndefined();
   });
 });

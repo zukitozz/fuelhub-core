@@ -22,6 +22,19 @@
 // `producto_nombre` = la descripción cruda del XML, sin `producto_id`) pero
 // en estado `PENDIENTE_REVISION` (migración 1788600000000) para que Jorge
 // la revise a mano -- más seguro que archivar mal un producto en silencio.
+//
+// v1.85 -- hallazgo real de Jorge: su proveedor empezó a facturar el diésel
+// como "DIESEL B5 S-50 UV PREMIUM" -- matchea DIESEL (keyword "DIESEL"/" B5")
+// Y TAMBIÉN PREMIUM (keyword "PREMIUM" literal), así que caía AMBIGUO y
+// quedaba en PENDIENTE_REVISION en vez de matchear derecho a "Diésel". El
+// catálogo hoy solo tiene UN producto de diésel (no hay "Diésel Regular"/
+// "Diésel Premium" separados, a diferencia de la gasolina) -- "PREMIUM"/
+// "REGULAR" en una descripción que YA matchea diésel son calificativos
+// comerciales del diésel mismo (aditivado, UV, etc.), nunca octanaje de
+// gasolina. Por eso DIESEL gana cuando hay ambigüedad contra PREMIUM/REGULAR
+// específicamente (`resolverAmbiguedadDiesel` abajo) -- si el catálogo algún
+// día agrega un diésel premium/regular separado, esta regla hay que
+// revisarla (dejar de ser automática y volver a PENDIENTE_REVISION).
 
 import type { CategoriaProducto } from '@fuelhub/shared-kernel';
 
@@ -66,10 +79,33 @@ export function matchearProducto(descripcionItem: string, catalogo: readonly Pro
     return matcheaKeyword || matcheaAlias;
   });
 
-  // Sin match, o ambiguo (calza con 2+ productos a la vez) -- ambos casos
-  // se resuelven igual aguas arriba (PENDIENTE_REVISION), ver cabecera.
-  if (coincidencias.length !== 1) return undefined;
-  return coincidencias[0];
+  if (coincidencias.length === 1) return coincidencias[0];
+  if (coincidencias.length > 1) {
+    const resuelto = resolverAmbiguedadDiesel(coincidencias);
+    if (resuelto) return resuelto;
+  }
+
+  // Sin match, o ambiguo sin poder resolverse (calza con 2+ productos a la
+  // vez) -- se resuelve aguas arriba (PENDIENTE_REVISION), ver cabecera.
+  return undefined;
+}
+
+/**
+ * Ver nota de cabecera (v1.85). Si DIESEL matcheó junto con PREMIUM y/o
+ * REGULAR (y nada más), DIESEL gana -- esos dos son calificativos de
+ * octanaje de GASOLINA, no de diésel; mientras el catálogo no tenga un
+ * diésel premium/regular separado, verlos junto a un match de diésel es
+ * ambigüedad falsa, no una duda real. Cualquier otra combinación (ej. GLP +
+ * DIESEL, o 3+ matches) sigue sin resolverse acá -- eso sí es una
+ * ambigüedad real, va a PENDIENTE_REVISION como siempre.
+ */
+function resolverAmbiguedadDiesel(coincidencias: readonly ProductoCatalogo[]): ProductoCatalogo | undefined {
+  const diesel = coincidencias.find((p) => normalizar(p.nombre) === 'DIESEL');
+  if (!diesel) return undefined;
+
+  const resto = coincidencias.filter((p) => p !== diesel);
+  const restoSoloGasolina = resto.every((p) => ['PREMIUM', 'REGULAR'].includes(normalizar(p.nombre)));
+  return restoSoloGasolina ? diesel : undefined;
 }
 
 /** Mayúsculas + sin tildes/diacríticos + espacios colapsados -- para comparar sin depender de cómo cada proveedor tildó/capitalizó su descripción. */
