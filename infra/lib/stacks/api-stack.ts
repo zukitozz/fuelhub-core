@@ -483,19 +483,31 @@ export class ApiStack extends Stack {
     // liviano y sin el timeout largo que necesitaba antes.
     //
     // Bucket dedicado, sin acceso público (BLOCK_ALL -- la URL firmada es lo
-    // que da acceso, no el bucket). Ya NO tiene `lifecycleRules` de
-    // expiración (hasta v1.77 vivía 1 día porque el PDF se regeneraba en
-    // cada request y no hacía falta guardarlo más que eso) -- desde v1.78
-    // cada PDF se genera UNA VEZ con una key estable y se sirve tal cual
-    // indefinidamente, así que borrarlo a las 24h rompería cualquier
-    // consulta posterior. Sigue con RemovalPolicy.DESTROY + autoDeleteObjects
-    // (recurso propio de este stack, no compartido como `notificaciones-bus`)
-    // -- destruir el stack sigue destruyendo estos PDFs, son regenerables
-    // re-disparando `GenerarReporteDiaDocumento` a mano si hiciera falta.
+    // que da acceso, no el bucket).
+    //
+    // v1.86 -- decisión de Jorge: estos PDFs no tienen valor pasado un mes
+    // (se mandan por WhatsApp en el momento del cierre; nadie los vuelve a
+    // pedir semanas después, y el cambio de formato de key de v1.85 ya dejó
+    // huérfanos a todos los anteriores a esa fecha -- ver DocumentoReporteKey.ts).
+    // En vez de mantenerlos indefinidamente (como se decidió en v1.78,
+    // cuando pasaron de vivir 1 día a vivir para siempre), ahora expiran
+    // solos a los 30 días vía lifecycle rule de S3 -- cubre tanto los de
+    // día (`cierre_dia_...`) como los de turno (`cierre_turno_...`), ambos
+    // bajo el mismo prefijo `reportes-dia/`. Sigue con RemovalPolicy.DESTROY
+    // + autoDeleteObjects (recurso propio de este stack, no compartido como
+    // `notificaciones-bus`) -- destruir el stack sigue destruyendo estos
+    // PDFs, son regenerables re-disparando `GenerarReporteDiaDocumento`/
+    // `GenerarReporteTurnoDocumento` a mano si hiciera falta.
     const reportesDocumentosBucket = new s3.Bucket(this, 'ReportesDocumentosBucket', {
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [
+        {
+          prefix: 'reportes-dia/',
+          expiration: Duration.days(30),
+        },
+      ],
     });
 
     const reportesDiaDocumento = reportesDia.addResource('documento');
