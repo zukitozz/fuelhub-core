@@ -8,7 +8,7 @@
 // proveedor de Jorge -- pendiente confirmar contra uno real cuando se
 // pruebe la integración completa.
 
-import { FacturaXmlInvalidaError, parsearFacturaProveedorXml } from './FacturaProveedorXml';
+import { ConstanciaDeRecepcionError, FacturaXmlInvalidaError, parsearFacturaProveedorXml } from './FacturaProveedorXml';
 
 function facturaValida(lineasXml: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -149,5 +149,41 @@ describe('parsearFacturaProveedorXml', () => {
       '<cbc:PayableAmount currencyID="PEN">no-es-un-numero</cbc:PayableAmount>'
     );
     expect(() => parsearFacturaProveedorXml(xmlImporteInvalido)).toThrow(FacturaXmlInvalidaError);
+  });
+
+  // v1.86 -- CDR de SUNAT: cada correo de proveedor trae, junto al XML de la
+  // factura, el acuse de recepción (`ApplicationResponse`, no `Invoice`) --
+  // hallazgo real de Jorge, ver cabecera de FacturaProveedorXml.ts.
+  const CDR_SUNAT = `<?xml version="1.0" encoding="ISO-8859-1"?>
+<ar:ApplicationResponse xmlns:ar="urn:oasis:names:specification:ubl:schema:xsd:ApplicationResponse-2"
+                         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+                         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:UBLVersionID>2.0</cbc:UBLVersionID>
+  <cbc:ID>R-F001-00012345</cbc:ID>
+  <cbc:IssueDate>2026-09-15</cbc:IssueDate>
+  <cac:DocumentResponse>
+    <cac:Response>
+      <cbc:ReferenceID>F001-00012345</cbc:ReferenceID>
+      <cbc:ResponseCode>0</cbc:ResponseCode>
+      <cbc:Description>La Factura numero F001-00012345, ha sido aceptada</cbc:Description>
+    </cac:Response>
+  </cac:DocumentResponse>
+</ar:ApplicationResponse>`;
+
+  it('reconoce un CDR de SUNAT (DocumentResponse/Response/ResponseCode) por su contenido, no por nombre de archivo -- no es FacturaXmlInvalidaError', () => {
+    expect(() => parsearFacturaProveedorXml(CDR_SUNAT)).toThrow(ConstanciaDeRecepcionError);
+    expect(() => parsearFacturaProveedorXml(CDR_SUNAT)).not.toThrow(FacturaXmlInvalidaError);
+  });
+
+  it('un comprobante no soportado que NO es un CDR (ej. CreditNote) sigue siendo FacturaXmlInvalidaError, no ConstanciaDeRecepcionError', () => {
+    expect(() => parsearFacturaProveedorXml('<CreditNote><ID>FC01-1</ID></CreditNote>')).toThrow(FacturaXmlInvalidaError);
+    expect(() => parsearFacturaProveedorXml('<CreditNote><ID>FC01-1</ID></CreditNote>')).not.toThrow(ConstanciaDeRecepcionError);
+  });
+
+  it('una factura válida nunca se confunde con un CDR -- no contiene la cadena DocumentResponse/Response/ResponseCode', () => {
+    // Guarda explícita pedida por Jorge: antes de confiar en la detección
+    // por contenido, confirmar que una factura real no cae en el mismo
+    // patrón por casualidad.
+    expect(() => parsearFacturaProveedorXml(facturaValida(LINEA_DIESEL))).not.toThrow(ConstanciaDeRecepcionError);
   });
 });

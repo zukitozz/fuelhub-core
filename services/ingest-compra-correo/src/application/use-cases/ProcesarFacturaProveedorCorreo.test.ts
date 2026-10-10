@@ -4,7 +4,7 @@
 // repo -- casos de uso se prueban con Jest puro, sin mocks de AWS, gracias
 // al límite hexagonal -- ver jest.config.mjs).
 
-import { FacturaXmlInvalidaError } from '../../domain/FacturaProveedorXml';
+import { ConstanciaDeRecepcionError, FacturaXmlInvalidaError } from '../../domain/FacturaProveedorXml';
 import { EstacionNoReconocidaError } from '../../domain/EstacionNoReconocidaError';
 import {
   ComprobanteDuplicadoError,
@@ -187,6 +187,24 @@ describe('ProcesarFacturaProveedorCorreo', () => {
     const caso = new ProcesarFacturaProveedorCorreo(repo);
 
     await expect(caso.ejecutar('esto no es XML')).rejects.toThrow(FacturaXmlInvalidaError);
+    expect(repo.llamadasListarCatalogo).toBe(0);
+  });
+
+  it('propaga ConstanciaDeRecepcionError para el CDR de SUNAT -- no llega a tocar el repositorio (v1.86, el handler lo trata distinto a un error real)', async () => {
+    const repo = new RepoFake();
+    const caso = new ProcesarFacturaProveedorCorreo(repo);
+    const cdr = `<?xml version="1.0" encoding="ISO-8859-1"?>
+<ar:ApplicationResponse xmlns:ar="urn:oasis:names:specification:ubl:schema:xsd:ApplicationResponse-2"
+                         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+                         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cac:DocumentResponse>
+    <cac:Response>
+      <cbc:ResponseCode>0</cbc:ResponseCode>
+    </cac:Response>
+  </cac:DocumentResponse>
+</ar:ApplicationResponse>`;
+
+    await expect(caso.ejecutar(cdr)).rejects.toThrow(ConstanciaDeRecepcionError);
     expect(repo.llamadasListarCatalogo).toBe(0);
   });
 });

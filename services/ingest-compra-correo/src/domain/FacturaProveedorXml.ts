@@ -46,6 +46,30 @@
 // `proveedor_ruc`/`numero_comprobante` para el índice único que evita
 // reprocesar la MISMA línea dos veces sin bloquear líneas DISTINTAS de la
 // misma factura.
+//
+// v1.86 -- hallazgo real de Jorge: cada correo de proveedor (PETROPERU
+// confirmado, probablemente otros PSE también) trae, junto al XML de la
+// factura, un SEGUNDO XML adjunto -- el CDR (Constancia de Recepción) que
+// SUNAT emite como acuse, un documento UBL `ApplicationResponse`, no
+// `Invoice`. Antes de este cambio, ese segundo XML hacía fallar
+// `parsearFacturaProveedorXml` con "no se encontró el elemento raíz
+// <Invoice>", y el handler (que trata CUALQUIER falla de CUALQUIER adjunto
+// del correo como motivo para etiquetar `FuelHub/Error`) marcaba el correo
+// entero como error -- aunque la factura real ya se hubiera registrado
+// bien. `esConstanciaDeRecepcion` distingue este caso (XML válido, pero
+// genuinamente no es una factura) de un XML corrupto/no soportado de
+// verdad, para que el handler pueda saltarlo en silencio en vez de contar
+// como fallo.
+//
+// Detección por CONTENIDO (pedido explícito de Jorge), no por el nombre del
+// archivo adjunto ni del elemento raíz -- un PSE distinto podría nombrar el
+// adjunto de otra forma, o envolver el `ApplicationResponse` con un prefijo
+// de namespace distinto. La cadena `DocumentResponse > Response >
+// ResponseCode` es la firma real del CDR en el estándar UBL 2.1 (con
+// `removeNSPrefix: true` ya no importan los prefijos `cac:`/`cbc:`), y no
+// aparece en ningún lado de una `<Invoice>` real -- confirmado a mano contra
+// el XML de ejemplo de este archivo y contra dos facturas reales de
+// PETROPERU que Jorge compartió (ninguna de las dos contiene ese patrón).
 
 import { XMLParser } from 'fast-xml-parser';
 
@@ -53,6 +77,20 @@ export class FacturaXmlInvalidaError extends Error {
   constructor(motivo: string) {
     super(`Factura XML inválida: ${motivo}`);
     this.name = 'FacturaXmlInvalidaError';
+  }
+}
+
+/**
+ * El XML es válido y parseable, pero es una Constancia de Recepción (CDR)
+ * de SUNAT -- el acuse de recepción que acompaña a la factura en el mismo
+ * correo, no una factura en sí. No es un error real: el caso de uso/handler
+ * que orquesta el procesamiento del correo debe omitir este adjunto sin
+ * contarlo como fallo (ver nota de cabecera, v1.86).
+ */
+export class ConstanciaDeRecepcionError extends Error {
+  constructor() {
+    super('El XML es una Constancia de Recepción (CDR) de SUNAT, no una factura -- se omite, no es un error.');
+    this.name = 'ConstanciaDeRecepcionError';
   }
 }
 
@@ -88,6 +126,9 @@ export function parsearFacturaProveedorXml(xml: string): FacturaProveedorDTO {
 
   const invNodo = doc.Invoice;
   if (invNodo === undefined || invNodo === null || typeof invNodo !== 'object') {
+    if (esConstanciaDeRecepcion(doc)) {
+      throw new ConstanciaDeRecepcionError();
+    }
     throw new FacturaXmlInvalidaError(
       'no se encontró el elemento raíz <Invoice> -- ¿es una factura electrónica UBL? (boletas/notas de crédito/débito no están soportadas todavía)'
     );
@@ -181,6 +222,41 @@ function requerirTexto(nodo: unknown, campo: string): string {
     throw new FacturaXmlInvalidaError(`falta el campo requerido ${campo}`);
   }
   return String(valor).trim();
+}
+
+// Firma UBL del CDR de SUNAT -- ver nota de cabecera (v1.86). Se busca en
+// cualquier parte del árbol parseado, no solo bajo un nombre de raíz fijo.
+const CADENA_CDR = ['DocumentResponse', 'Response', 'ResponseCode'] as const;
+
+function esConstanciaDeRecepcion(doc: Record<string, unknown>): boolean {
+  return contieneCadenaAnidadaEnAlgunLado(doc, CADENA_CDR);
+}
+
+/** ¿Existe, a partir de ESTE nodo exacto, la cadena completa de claves anidadas? */
+function coincideCadenaDesdeAqui(nodo: unknown, cadena: readonly string[]): boolean {
+  let actual = nodo;
+  for (const paso of cadena) {
+    if (actual === undefined || actual === null || typeof actual !== 'object') return false;
+    actual = (actual as Record<string, unknown>)[paso];
+  }
+  return actual !== undefined && actual !== null;
+}
+
+/**
+ * Busca la cadena en todo el árbol, no solo desde la raíz -- así la
+ * detección no depende de qué nombre tenga el elemento raíz (puede variar
+ * según el PSE que emitió el CDR).
+ */
+function contieneCadenaAnidadaEnAlgunLado(nodo: unknown, cadena: readonly string[]): boolean {
+  if (coincideCadenaDesdeAqui(nodo, cadena)) return true;
+  if (nodo === undefined || nodo === null || typeof nodo !== 'object') return false;
+  for (const valor of Object.values(nodo as Record<string, unknown>)) {
+    const candidatos = Array.isArray(valor) ? valor : [valor];
+    for (const candidato of candidatos) {
+      if (contieneCadenaAnidadaEnAlgunLado(candidato, cadena)) return true;
+    }
+  }
+  return false;
 }
 
 function requerirNumero(nodo: unknown, campo: string): number {

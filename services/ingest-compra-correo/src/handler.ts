@@ -58,9 +58,16 @@
 // buzón. `GmailFacturaProveedorSource` es quien arma el query distinto
 // según el caso; acá solo hace falta que la deduplicación por (secreto,
 // etiqueta) trate `null` como un valor de etiqueta más (ver `clave()`).
+//
+// v1.86 -- un adjunto que resulta ser el CDR de SUNAT (`ConstanciaDeRecepcionError`,
+// ver FacturaProveedorXml.ts) NO cuenta como fallo del aislamiento de (b):
+// se salta con un `continue`, sin tocar `huboError` -- si la factura real
+// (el OTRO adjunto XML del mismo correo) sí se registró bien, el correo
+// igual queda `FuelHub/Procesado`.
 
 import { RDSDataClient } from '@aws-sdk/client-rds-data';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { ConstanciaDeRecepcionError } from './domain/FacturaProveedorXml';
 import { ProcesarFacturaProveedorCorreo } from './application/use-cases/ProcesarFacturaProveedorCorreo';
 import { PostgresCompraCorreoRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCompraCorreoRepository';
 import { GmailFacturaProveedorSource, type CredencialesGmail } from './infrastructure/adapters/GmailFacturaProveedorSource';
@@ -160,6 +167,17 @@ export const handler = async (): Promise<{ procesados: number; pendientesLeidos:
               `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} comprobante=${resultado.numeroComprobante} lineas=${JSON.stringify(resultado.lineas)}`
             );
           } catch (err) {
+            if (err instanceof ConstanciaDeRecepcionError) {
+              // v1.86 -- el CDR que SUNAT adjunta junto a la factura real no
+              // es un fallo: se omite sin marcar huboError ni loguear como
+              // ERROR, para no mancharle la etiqueta a un correo cuya
+              // factura real sí se registró bien (ver cabecera de
+              // FacturaProveedorXml.ts).
+              console.log(
+                `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} adjunto omitido: es una Constancia de Recepción (CDR), no una factura`
+              );
+              continue;
+            }
             huboError = true;
             console.error(
               `[ingest-compra-correo] etiqueta=${config.etiquetaGmail ?? '(sin-etiqueta)'} mensaje=${mensaje.mensajeId} error: ${err instanceof Error ? err.message : String(err)}`
