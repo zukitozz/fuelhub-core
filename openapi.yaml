@@ -892,6 +892,24 @@ components:
           description: Segundos de validez de la URL firmada desde el momento de esta respuesta.
           example: 600
 
+    ReporteComprasSemanalDocumento:
+      type: object
+      description: Respuesta de GET /reportes/compras-semanal/documento (v1.86) — mismo contrato que ReporteDiaDocumento, pero para el Excel semanal de compras.
+      required: [url, tipo, expiraEn]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL firmada de S3, descargable sin autenticación adicional. Válida por "expiraEn" segundos desde el momento de esta respuesta.
+        tipo:
+          type: string
+          enum: [application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
+          description: Content-Type real del archivo en la URL (Excel .xlsx).
+        expiraEn:
+          type: integer
+          description: Segundos de validez de la URL firmada desde el momento de esta respuesta.
+          example: 600
+
     Paginacion:
       type: object
       properties:
@@ -1592,6 +1610,61 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           description: No existe ningún cierre de día ACTIVO para esa fecha (ni para la estación puntual, ni para ninguna de las estaciones del token en el caso consolidado).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /reportes/compras-semanal/documento:
+    get:
+      tags: [reportes]
+      summary: Reporte semanal de compras de combustible como Excel descargable (uso M2M, notificaciones por WhatsApp)
+      description: >
+        v1.86 — pedido nuevo de notificaciones-whatsapp: aviso semanal (todos
+        los lunes) con el volumen de combustible COMPRADO la semana
+        anterior, por producto, por estación — no es venta/POS (eso ya lo
+        cubre GET /reportes/dia). Se genera una sola vez por semana, en un
+        Lambda disparado por cron (no por un evento de cierre), apenas
+        termina de correr se publica el evento
+        `ReporteComprasSemanalRegistrado`. `estacionCodigo` es SIEMPRE
+        obligatorio (mismo criterio que /reportes/turno/documento — solo lo
+        reciben administradores de una estación, no hay modo consolidado).
+        `fechaFin` NO es un parámetro: se calcula del lado de FuelHub
+        (fechaInicio + 6 días) para que no pueda pedirse un rango distinto
+        al que anunció el evento.
+      operationId: obtenerReporteComprasSemanalDocumento
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - name: estacionCodigo
+          in: query
+          required: true
+          description: Código de la estación — obligatorio, este reporte no tiene modo consolidado.
+          schema:
+            type: string
+          example: "CHANCAYLLO"
+        - name: fechaInicio
+          in: query
+          required: true
+          description: Lunes de la semana a reportar (YYYY-MM-DD) — el mismo valor que trae el evento `ReporteComprasSemanalRegistrado`.
+          schema:
+            type: string
+            format: date
+          example: "2026-10-05"
+      responses:
+        '200':
+          description: URL firmada al Excel pre-generado de esa estación/semana.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporteComprasSemanalDocumento'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe ningún reporte generado para esa estación/semana (semana todavía no procesada por el cron, o fechaInicio que no corresponde a ningún lunes ya reportado).
           content:
             application/json:
               schema:

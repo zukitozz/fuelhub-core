@@ -32,10 +32,20 @@
 //
 // `estacionCodigo` ya llega en mayúsculas (columna `estaciones.codigo`,
 // sección 3.3), así que no hace falta normalizar casing acá.
+//
+// v1.86 -- reporte semanal de COMPRAS (no ventas -- corrección de Jorge
+// durante el diseño): prefijo propio `reportes-semanal/`, separado de
+// `reportes-dia/`, porque tiene su propia `lifecycleRule` de expiración
+// corta (2 días -- "una vez enviado debería desaparecer", decisión de
+// Jorge, a diferencia de los 30 días de día/turno) y no tiene sentido que
+// un cambio de retención de uno afecte al otro si comparten prefijo. El
+// nombre de archivo lleva el rango completo (`fechaInicio`+`fechaFin`) en
+// vez de una sola fecha -- es un reporte de RANGO, no de un cierre puntual.
 
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
 
 const PREFIJO = 'reportes-dia';
+const PREFIJO_SEMANAL = 'reportes-semanal';
 const FORMATO_FECHA = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function validarFechaNegocio(fechaNegocio: string): string {
@@ -72,4 +82,8 @@ export function construirKeyDocumentoTurno(
   turno: 'TURNO1' | 'TURNO2' | 'TURNO3'
 ): string {
   return `${PREFIJO}/cierre_turno_${estacionCodigo}_${validarFechaNegocio(fechaNegocio)}_${SUFIJO_POR_TURNO[turno]}.pdf`;
+}
+
+export function construirKeyDocumentoComprasSemanal(estacionCodigo: string, fechaInicio: string, fechaFin: string): string {
+  return `${PREFIJO_SEMANAL}/reporte_compras_semanal_${estacionCodigo}_${validarFechaNegocio(fechaInicio)}_${validarFechaNegocio(fechaFin)}.xlsx`;
 }

@@ -80,6 +80,16 @@ function entryTurnoDocumentoDe(servicio: string): string {
 function entryGenerarTurnoDocumentoDe(servicio: string): string {
   return path.join(SERVICES_ROOT, servicio, 'src', 'handler-generar-turno-documento.ts');
 }
+// entryComprasSemanalDocumentoDe / entryGenerarComprasSemanalDocumentoDe --
+// v1.86, GET /reportes/compras-semanal/documento + su Lambda de cron
+// semanal -- mismo criterio que entryTurnoDocumentoDe/entryGenerarTurnoDocumentoDe
+// arriba, pares separados.
+function entryComprasSemanalDocumentoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-compras-semanal-documento.ts');
+}
+function entryGenerarComprasSemanalDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-generar-compras-semanal.ts');
+}
 
 export interface ApiStackProps extends StackProps {
   readonly grupoId: string;
@@ -507,6 +517,14 @@ export class ApiStack extends Stack {
           prefix: 'reportes-dia/',
           expiration: Duration.days(30),
         },
+        // v1.86 -- reporte semanal de compras: retención corta a propósito
+        // ("una vez enviado debería desaparecer", decisión de Jorge) --
+        // prefijo propio `reportes-semanal/`, sin afectar la regla de
+        // arriba. Ver DocumentoReporteKey.ts.
+        {
+          prefix: 'reportes-semanal/',
+          expiration: Duration.days(2),
+        },
       ],
     });
 
@@ -664,6 +682,64 @@ export class ApiStack extends Stack {
         detailType: ['CierreTurnoRegistrado'],
       },
       targets: [new targets.LambdaFunction(generarReporteTurnoDocumento)],
+    });
+
+    // --- consulta-reportes: GET /reportes/compras-semanal/documento (v1.86) ----
+    // Mismo contrato que /reportes/dia|turno/documento (URL firmada de S3,
+    // mismo scope) -- `estacionCodigo` + `fechaInicio` (el lunes); `fechaFin`
+    // se calcula del lado del Lambda (+6 días), no es un parámetro -- ver
+    // ObtenerReporteComprasSemanalDocumento.ts.
+    const reportesComprasSemanal = reportes.addResource('compras-semanal');
+    const reportesComprasSemanalDocumento = reportesComprasSemanal.addResource('documento');
+
+    const consultaReportesComprasSemanalDocumento = new AuthenticatedEndpoint(this, 'ConsultaReportesComprasSemanalDocumento', {
+      api,
+      authorizer,
+      resource: reportesComprasSemanalDocumento,
+      method: 'GET',
+      entry: entryComprasSemanalDocumentoDe('consulta-reportes'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/cierres.read', // mismo scope que día/turno
+      environment: {
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+    });
+
+    reportesDocumentosBucket.grantRead(consultaReportesComprasSemanalDocumento.fn);
+
+    // --- generarReporteComprasSemanal: Lambda por cron (v1.86) -----------------
+    // A diferencia de generarReporteDiaDocumento/generarReporteTurnoDocumento
+    // (disparados por un evento de negocio), este corre por `schedule` --
+    // todos los lunes, genera el Excel de TODAS las estaciones activas y
+    // publica `ReporteComprasSemanalRegistrado` por cada una -- ver
+    // GenerarReporteComprasSemanalDocumento.ts. Sin el `afterBundling` hook
+    // de pdfkit (`exceljs` es JS puro, no carga archivos `.afm` en runtime).
+    const generarReporteComprasSemanal = new NodejsFunction(this, 'GenerarReporteComprasSemanalFn', {
+      entry: entryGenerarComprasSemanalDe('consulta-reportes'),
+      runtime: Runtime.NODEJS_22_X,
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      timeout: Duration.seconds(60), // todas las estaciones activas en una sola corrida, no una por invocación
+      environment: {
+        ...AURORA_ENV,
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+        EVENTBRIDGE_BUS_NAME: notificacionesBus.eventBusName,
+      },
+    });
+
+    reportesDocumentosBucket.grantWrite(generarReporteComprasSemanal);
+    dataStack.cluster.grantDataApiAccess(generarReporteComprasSemanal);
+    notificacionesBus.grantPutEventsTo(generarReporteComprasSemanal);
+
+    // Lunes 13:00 UTC = 8:00 hora Perú (UTC-5) -- mismo horario en dev y
+    // prod, a diferencia del cron de ingest-compra-correo (que sí varía por
+    // ambiente, ver más abajo): acá no hay el mismo riesgo de "dos
+    // ambientes compitiendo por el mismo recurso externo", cada ambiente
+    // lee su propia Aurora.
+    new events.Rule(this, 'GenerarReporteComprasSemanalSchedule', {
+      schedule: events.Schedule.cron({ weekDay: 'MON', hour: '13', minute: '0' }),
+      targets: [new targets.LambdaFunction(generarReporteComprasSemanal)],
     });
 
     // --- ingestCompraCorreo: Lambda por cron (v1.81, sin ruta de API) ----------

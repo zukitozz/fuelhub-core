@@ -59,3 +59,23 @@ export function normalizarFechaNegocio(fechaNegocio: string | undefined): string
   }
   return fechaNegocio;
 }
+
+/**
+ * Suma `dias` días de calendario a `fecha` (YYYY-MM-DD) -- v1.86, reporte
+ * semanal de compras: el contrato con notificaciones-whatsapp pasó a pedir
+ * solo `fechaInicio` (el lunes), con `fechaFin` calculada acá mismo del
+ * lado de FuelHub (+6 días) en vez de que el cliente mande las dos y pueda
+ * desalinearse del evento que recibió. Aritmética con `Date` en UTC
+ * (`T00:00:00Z` fijo) para no depender de la zona horaria del runtime del
+ * Lambda -- un `new Date('2026-10-05')` sin hora ya se interpreta como UTC
+ * medianoche en JS, así que esto es solo explícito, no un cambio de
+ * comportamiento.
+ */
+export function sumarDias(fecha: string, dias: number): string {
+  const partes = fecha.split('-');
+  const anio = Number(partes[0]);
+  const mes = Number(partes[1]);
+  const dia = Number(partes[2]);
+  const resultado = new Date(Date.UTC(anio, mes - 1, dia + dias));
+  return resultado.toISOString().slice(0, 10);
+}

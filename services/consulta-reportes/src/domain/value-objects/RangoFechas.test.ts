@@ -7,7 +7,7 @@
 // `normalizarRangoFechas` (fechas siempre opcionales) esta sí tiene una
 // rama de error nueva y no trivial: el parámetro es OBLIGATORIO.
 
-import { normalizarFechaNegocio, normalizarRangoFechas } from './RangoFechas';
+import { normalizarFechaNegocio, normalizarRangoFechas, sumarDias } from './RangoFechas';
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
 
 describe('normalizarFechaNegocio', () => {
@@ -31,5 +31,23 @@ describe('normalizarRangoFechas (regresión — sin cambios de comportamiento)',
 
   it('sigue rechazando un rango invertido', () => {
     expect(() => normalizarRangoFechas('2026-08-31', '2026-08-01')).toThrow(ParametrosInvalidosError);
+  });
+});
+
+describe('sumarDias (v1.86, reporte semanal de compras)', () => {
+  it('suma días dentro del mismo mes', () => {
+    expect(sumarDias('2026-10-05', 6)).toBe('2026-10-11');
+  });
+
+  it('cruza de mes correctamente', () => {
+    expect(sumarDias('2026-10-28', 6)).toBe('2026-11-03');
+  });
+
+  it('cruza de año correctamente', () => {
+    expect(sumarDias('2026-12-29', 6)).toBe('2027-01-04');
+  });
+
+  it('acepta días negativos -- "hace 7 días" para calcular el lunes anterior', () => {
+    expect(sumarDias('2026-10-12', -7)).toBe('2026-10-05');
   });
 });

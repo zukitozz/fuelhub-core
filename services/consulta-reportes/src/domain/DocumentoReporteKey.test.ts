@@ -1,7 +1,12 @@
 // DocumentoReporteKey.test.ts (v1.78, formato reescrito v1.85)
 
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
-import { construirKeyDocumentoConsolidado, construirKeyDocumentoEstacion, construirKeyDocumentoTurno } from './DocumentoReporteKey';
+import {
+  construirKeyDocumentoComprasSemanal,
+  construirKeyDocumentoConsolidado,
+  construirKeyDocumentoEstacion,
+  construirKeyDocumentoTurno,
+} from './DocumentoReporteKey';
 
 describe('DocumentoReporteKey', () => {
   it('construye la key de una estación con el formato legible pedido por notificaciones-whatsapp (v1.85)', () => {
@@ -31,5 +36,16 @@ describe('DocumentoReporteKey', () => {
 
   it('rechaza fechaNegocio con formato inválido en la key de turno', () => {
     expect(() => construirKeyDocumentoTurno('PACHACUTEC', '15/09/2026', 'TURNO1')).toThrow(ParametrosInvalidosError);
+  });
+
+  it('construye la key del reporte de compras semanal con el rango completo (v1.86)', () => {
+    expect(construirKeyDocumentoComprasSemanal('CHANCAYLLO', '2026-10-05', '2026-10-11')).toBe(
+      'reportes-semanal/reporte_compras_semanal_CHANCAYLLO_2026-10-05_2026-10-11.xlsx'
+    );
+  });
+
+  it('rechaza fechaInicio o fechaFin con formato inválido en la key semanal', () => {
+    expect(() => construirKeyDocumentoComprasSemanal('CHANCAYLLO', '05/10/2026', '2026-10-11')).toThrow(ParametrosInvalidosError);
+    expect(() => construirKeyDocumentoComprasSemanal('CHANCAYLLO', '2026-10-05', '11/10/2026')).toThrow(ParametrosInvalidosError);
   });
 });
