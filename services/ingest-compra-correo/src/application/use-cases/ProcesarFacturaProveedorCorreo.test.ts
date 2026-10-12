@@ -123,6 +123,52 @@ describe('ProcesarFacturaProveedorCorreo', () => {
     });
   });
 
+  it('pasa numeroAutorizacionScop/placa/terminalAbastecimiento tal cual los parseó FacturaProveedorXml (v1.87)', async () => {
+    const xmlConCamposRegulatorios = `<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+         xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2">
+  <ext:UBLExtensions>
+    <ext:UBLExtension>
+      <ext:ExtensionContent>
+        <DatosAdicionales>
+          <DatoAdicional><Codigo>21</Codigo><Valor><![CDATA[5201 TERMINAL CALLAO]]></Valor></DatoAdicional>
+        </DatosAdicionales>
+      </ext:ExtensionContent>
+    </ext:UBLExtension>
+  </ext:UBLExtensions>
+  <cbc:ID>F001-00012345</cbc:ID>
+  <cbc:IssueDate>2026-09-15</cbc:IssueDate>
+  <cbc:DocumentCurrencyCode>PEN</cbc:DocumentCurrencyCode>
+  <cac:AdditionalDocumentReference><cbc:ID>12770525994</cbc:ID></cac:AdditionalDocumentReference>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="6">20123456789</cbc:ID></cac:PartyIdentification>
+      <cac:PartyLegalEntity><cbc:RegistrationName>DISTRIBUIDORA XYZ SAC</cbc:RegistrationName></cac:PartyLegalEntity>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party><cac:PartyIdentification><cbc:ID schemeID="6">20612016527</cbc:ID></cac:PartyIdentification></cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:Delivery><cac:Shipment><cac:ShipmentStage><cac:TransportMeans><cac:RoadTransport>
+    <cbc:LicensePlateID>PEAJA914</cbc:LicensePlateID>
+  </cac:RoadTransport></cac:TransportMeans></cac:ShipmentStage></cac:Shipment></cac:Delivery>
+  <cac:LegalMonetaryTotal><cbc:PayableAmount currencyID="PEN">1550.00</cbc:PayableAmount></cac:LegalMonetaryTotal>
+  ${LINEA_DIESEL}
+</Invoice>`;
+    const repo = new RepoFake();
+    const caso = new ProcesarFacturaProveedorCorreo(repo);
+
+    await caso.ejecutar(xmlConCamposRegulatorios);
+
+    expect(repo.compras[0]).toMatchObject({
+      numeroAutorizacionScop: '12770525994',
+      placa: 'PEAJA914',
+      terminalAbastecimiento: '5201 TERMINAL CALLAO',
+    });
+  });
+
   it('registra una línea que NO matchea ningún producto -- PENDIENTE_REVISION, con la descripción cruda', async () => {
     const repo = new RepoFake();
     const caso = new ProcesarFacturaProveedorCorreo(repo);

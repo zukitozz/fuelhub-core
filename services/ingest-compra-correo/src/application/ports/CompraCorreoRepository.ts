@@ -92,6 +92,12 @@ export interface DatosCompraCorreoAInsertar {
   readonly numeroComprobante: string;
   readonly numeroLineaComprobante: string;
   readonly estado: EstadoCompraCorreo;
+  /** v1.87 -- ver nota de cabecera de FacturaProveedorXml.ts. `null` si la factura no lo trae. */
+  readonly numeroAutorizacionScop: string | null;
+  /** v1.87 -- ídem. */
+  readonly placa: string | null;
+  /** v1.87 -- ídem. */
+  readonly terminalAbastecimiento: string | null;
 }
 
 /** Lanzado por `registrarCompra` si el INSERT choca con el índice único (carrera con `existeComprobante`, ver cabecera). */

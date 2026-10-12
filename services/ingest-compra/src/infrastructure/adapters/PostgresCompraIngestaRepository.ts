@@ -134,6 +134,9 @@ interface FilaCompra {
   readonly costoTotal: number;
   readonly numeroGuia: string | null;
   readonly numeroComprobante: string | null;
+  readonly numeroAutorizacionScop: string | null;
+  readonly placa: string | null;
+  readonly terminalAbastecimiento: string | null;
   readonly estado: EstadoCompra;
   readonly creadoEn: string;
 }
@@ -141,7 +144,8 @@ interface FilaCompra {
 const SELECT_COMPRA = `
   SELECT c.id, e.codigo AS codigo_estacion, c.producto_id, c.producto_nombre, c.categoria,
          c.proveedor, c.fecha, c.cantidad, c.costo_unitario, c.costo_total, c.numero_guia,
-         c.numero_comprobante, c.estado, c.creado_en
+         c.numero_comprobante, c.numero_autorizacion_scop, c.placa, c.terminal_abastecimiento,
+         c.estado, c.creado_en
   FROM compras c
   JOIN estaciones e ON e.id = c.estacion_id
 `;
@@ -206,6 +210,9 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
         costoTotal: cabecera.costoTotal,
         numeroGuia: datos.numeroGuia ?? null,
         numeroComprobante: null, // flujo manual (POST /compras) nunca lo trae -- ver nota de CompraIngestaRepository.ts
+        numeroAutorizacionScop: null, // v1.87 -- mismo criterio: solo lo trae el flujo de correo
+        placa: null,
+        terminalAbastecimiento: null,
         destinos,
         merma: calcularMerma(datos.cantidad, destinos),
         estado: 'ACTIVO',
@@ -354,7 +361,8 @@ export class PostgresCompraIngestaRepository implements CompraIngestaRepository 
                  WHERE c.estacion_id = e.id AND c.id = CAST(:id AS uuid)
                  RETURNING c.id, e.codigo AS codigo_estacion, c.producto_id, c.producto_nombre, c.categoria,
                            c.proveedor, c.fecha, c.cantidad, c.costo_unitario, c.costo_total, c.numero_guia,
-                           c.numero_comprobante, c.estado, c.creado_en`,
+                           c.numero_comprobante, c.numero_autorizacion_scop, c.placa, c.terminal_abastecimiento,
+                           c.estado, c.creado_en`,
                 parametros,
                 transactionId
               )
@@ -609,6 +617,11 @@ function mapearFilaCompra(fila: Record<string, unknown>): FilaCompra {
     costoTotal: Number(fila.costo_total),
     numeroGuia: fila.numero_guia === null || fila.numero_guia === undefined ? null : String(fila.numero_guia),
     numeroComprobante: fila.numero_comprobante === null || fila.numero_comprobante === undefined ? null : String(fila.numero_comprobante),
+    numeroAutorizacionScop:
+      fila.numero_autorizacion_scop === null || fila.numero_autorizacion_scop === undefined ? null : String(fila.numero_autorizacion_scop),
+    placa: fila.placa === null || fila.placa === undefined ? null : String(fila.placa),
+    terminalAbastecimiento:
+      fila.terminal_abastecimiento === null || fila.terminal_abastecimiento === undefined ? null : String(fila.terminal_abastecimiento),
     estado: fila.estado as EstadoCompra,
     creadoEn: String(fila.creado_en),
   };
@@ -647,6 +660,9 @@ function mapearCompraCompleta(compra: FilaCompra, destinos: readonly CompraDesti
     costoTotal: compra.costoTotal,
     numeroGuia: compra.numeroGuia,
     numeroComprobante: compra.numeroComprobante,
+    numeroAutorizacionScop: compra.numeroAutorizacionScop,
+    placa: compra.placa,
+    terminalAbastecimiento: compra.terminalAbastecimiento,
     destinos,
     merma: calcularMerma(compra.cantidad, destinos),
     estado: compra.estado,

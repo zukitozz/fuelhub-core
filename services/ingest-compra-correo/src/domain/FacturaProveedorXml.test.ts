@@ -68,6 +68,10 @@ describe('parsearFacturaProveedorXml', () => {
       fechaEmision: '2026-09-15',
       moneda: 'PEN',
       importeTotal: 1550,
+      // v1.87 -- null porque facturaValida() no trae ninguno de los 3 campos regulatorios opcionales, ver describe('campos regulatorios opcionales (v1.87)') más abajo.
+      numeroAutorizacionScop: null,
+      placa: null,
+      terminalAbastecimiento: null,
       items: [{ numeroLinea: '1', descripcion: 'DIESEL B5 S-50', cantidad: 100, unidadMedida: 'GLL', precioUnitario: 15.5, importe: 1550 }],
     });
   });
@@ -185,5 +189,95 @@ describe('parsearFacturaProveedorXml', () => {
     // por contenido, confirmar que una factura real no cae en el mismo
     // patrón por casualidad.
     expect(() => parsearFacturaProveedorXml(facturaValida(LINEA_DIESEL))).not.toThrow(ConstanciaDeRecepcionError);
+  });
+
+  // v1.87 -- SCOP/placa/terminal, estructura calcada de las 5 facturas
+  // reales de PETROPERU revisadas con Jorge (ver cabecera del archivo).
+  describe('campos regulatorios opcionales (v1.87)', () => {
+    function facturaConCamposRegulatorios(): string {
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+         xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
+         xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+  <ext:UBLExtensions>
+    <ext:UBLExtension>
+      <ext:ExtensionContent>
+        <DatosAdicionales>
+          <DatoAdicional>
+            <Codigo>11</Codigo>
+            <Valor><![CDATA[BDANILLA]]></Valor>
+          </DatoAdicional>
+          <DatoAdicional>
+            <Codigo>21</Codigo>
+            <Valor><![CDATA[5201 TERMINAL CALLAO]]></Valor>
+          </DatoAdicional>
+        </DatosAdicionales>
+      </ext:ExtensionContent>
+    </ext:UBLExtension>
+    <ext:UBLExtension>
+      <ext:ExtensionContent><ds:Signature><ds:SignedInfo /></ds:Signature></ext:ExtensionContent>
+    </ext:UBLExtension>
+  </ext:UBLExtensions>
+  <cbc:ID>F001-00012345</cbc:ID>
+  <cbc:IssueDate>2026-09-15</cbc:IssueDate>
+  <cbc:DocumentCurrencyCode>PEN</cbc:DocumentCurrencyCode>
+  <cac:AdditionalDocumentReference>
+    <cbc:ID>12770525994</cbc:ID>
+    <cbc:DocumentTypeCode listID="urn:...catalogo12">05</cbc:DocumentTypeCode>
+  </cac:AdditionalDocumentReference>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="6">20123456789</cbc:ID></cac:PartyIdentification>
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName><![CDATA[DISTRIBUIDORA DE COMBUSTIBLES SAC]]></cbc:RegistrationName>
+      </cac:PartyLegalEntity>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="6">20612016527</cbc:ID></cac:PartyIdentification>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:Delivery>
+    <cac:Shipment>
+      <cac:ShipmentStage>
+        <cac:TransportMeans>
+          <cac:RoadTransport>
+            <cbc:LicensePlateID>PEAJA914</cbc:LicensePlateID>
+          </cac:RoadTransport>
+        </cac:TransportMeans>
+      </cac:ShipmentStage>
+    </cac:Shipment>
+  </cac:Delivery>
+  <cac:LegalMonetaryTotal>
+    <cbc:PayableAmount currencyID="PEN">1550.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  ${LINEA_DIESEL}
+</Invoice>`;
+    }
+
+    it('extrae numeroAutorizacionScop de AdditionalDocumentReference/ID (campo estándar UBL)', () => {
+      const resultado = parsearFacturaProveedorXml(facturaConCamposRegulatorios());
+      expect(resultado.numeroAutorizacionScop).toBe('12770525994');
+    });
+
+    it('extrae placa de Delivery/Shipment/ShipmentStage/TransportMeans/RoadTransport/LicensePlateID (campo estándar UBL)', () => {
+      const resultado = parsearFacturaProveedorXml(facturaConCamposRegulatorios());
+      expect(resultado.placa).toBe('PEAJA914');
+    });
+
+    it('extrae terminalAbastecimiento del DatoAdicional Codigo=21 dentro de la extensión propietaria', () => {
+      const resultado = parsearFacturaProveedorXml(facturaConCamposRegulatorios());
+      expect(resultado.terminalAbastecimiento).toBe('5201 TERMINAL CALLAO');
+    });
+
+    it('los 3 campos quedan en null si la factura no los trae (facturaValida base, sin extensión ni AdditionalDocumentReference)', () => {
+      const resultado = parsearFacturaProveedorXml(facturaValida(LINEA_DIESEL));
+      expect(resultado.numeroAutorizacionScop).toBeNull();
+      expect(resultado.placa).toBeNull();
+      expect(resultado.terminalAbastecimiento).toBeNull();
+    });
   });
 });

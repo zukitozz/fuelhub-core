@@ -100,6 +100,9 @@ export class ProcesarFacturaProveedorCorreo {
           numeroComprobante: factura.serieCorrelativo,
           numeroLineaComprobante: item.numeroLinea,
           estado,
+          numeroAutorizacionScop: factura.numeroAutorizacionScop,
+          placa: factura.placa,
+          terminalAbastecimiento: factura.terminalAbastecimiento,
         });
         lineas.push({ numeroLinea: item.numeroLinea, resultado: 'REGISTRADA', compraId: id, estado });
       } catch (err) {

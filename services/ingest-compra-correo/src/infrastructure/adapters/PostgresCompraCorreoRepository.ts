@@ -93,12 +93,14 @@ export class PostgresCompraCorreoRepository implements CompraCorreoRepository {
       filas = await this.ejecutar(
         `INSERT INTO compras (
            estacion_id, producto_id, producto_nombre, categoria, proveedor, fecha, cantidad, costo_unitario,
-           origen, proveedor_ruc, numero_comprobante, numero_linea_comprobante, estado
+           origen, proveedor_ruc, numero_comprobante, numero_linea_comprobante, estado,
+           numero_autorizacion_scop, placa, terminal_abastecimiento
          )
          VALUES (
            CAST(:estacionId AS uuid), CAST(:productoId AS uuid), :productoNombre, CAST(:categoria AS categoria_producto), :proveedor,
            CAST(:fecha AS timestamptz), :cantidad, :costoUnitario,
-           'CORREO', :proveedorRuc, :numeroComprobante, :numeroLineaComprobante, CAST(:estado AS estado_compra)
+           'CORREO', :proveedorRuc, :numeroComprobante, :numeroLineaComprobante, CAST(:estado AS estado_compra),
+           :numeroAutorizacionScop, :placa, :terminalAbastecimiento
          )
          RETURNING id`,
         [
@@ -114,6 +116,9 @@ export class PostgresCompraCorreoRepository implements CompraCorreoRepository {
           paramText('numeroComprobante', datos.numeroComprobante),
           paramText('numeroLineaComprobante', datos.numeroLineaComprobante),
           paramText('estado', datos.estado),
+          paramText('numeroAutorizacionScop', datos.numeroAutorizacionScop),
+          paramText('placa', datos.placa),
+          paramText('terminalAbastecimiento', datos.terminalAbastecimiento),
         ]
       );
     } catch (err) {

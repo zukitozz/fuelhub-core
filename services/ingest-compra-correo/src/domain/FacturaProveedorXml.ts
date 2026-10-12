@@ -70,6 +70,29 @@
 // aparece en ningún lado de una `<Invoice>` real -- confirmado a mano contra
 // el XML de ejemplo de este archivo y contra dos facturas reales de
 // PETROPERU que Jorge compartió (ninguna de las dos contiene ese patrón).
+//
+// v1.87 -- 3 campos nuevos, todos OPCIONALES (`null` si faltan -- ningún
+// proveedor está obligado a incluirlos, y una factura que no sea de
+// combustibles líquidos no los trae en absoluto):
+//
+//   - `numeroAutorizacionScop`: código de autorización del Sistema de
+//     Control de Órdenes de Pedido (SCOP, Resolución OSINERG N.° 048-2003-
+//     OS/CD) -- CAMPO ESTÁNDAR de UBL 2.1, `AdditionalDocumentReference/ID`
+//     ("campo 31" del Anexo B de la Resolución SUNAT 245-2017, confirmado
+//     contra el reglamento oficial, no solo por inspección empírica). Si
+//     hubiera más de un `AdditionalDocumentReference` (ej. una guía de
+//     remisión Y el SCOP en la misma factura), se toma el PRIMERO -- caso
+//     no observado en ninguna de las 5 facturas reales revisadas con
+//     Jorge, documentado acá por si hiciera falta revisarlo si aparece.
+//   - `placa`: también estándar,
+//     `Delivery/Shipment/ShipmentStage/TransportMeans/RoadTransport/LicensePlateID`.
+//   - `terminalAbastecimiento`: a diferencia de los dos anteriores, este
+//     SOLO vive en la extensión propietaria del PSE (`ext:UBLExtensions`
+//     -> `DatosAdicionales` -> `DatoAdicional` con `Codigo = "21"`) -- no
+//     es parte del estándar UBL, confianza puramente empírica (5/5
+//     facturas reales de PETROPERU vía Digiflow lo traían ahí). Si el PSE
+//     cambia esa numeración, este campo puede volverse `null` en silencio
+//     -- aceptado, es informativo, no bloquea el registro de la compra.
 
 import { XMLParser } from 'fast-xml-parser';
 
@@ -111,6 +134,12 @@ export interface FacturaProveedorDTO {
   readonly fechaEmision: string;
   readonly moneda: string;
   readonly importeTotal: number;
+  /** v1.87 -- ver nota de cabecera. `null` si la factura no lo trae. */
+  readonly numeroAutorizacionScop: string | null;
+  /** v1.87 -- ver nota de cabecera. `null` si la factura no lo trae. */
+  readonly placa: string | null;
+  /** v1.87 -- ver nota de cabecera. `null` si la factura no lo trae (incluye el caso de un PSE que no use esta extensión propietaria). */
+  readonly terminalAbastecimiento: string | null;
   readonly items: readonly FacturaProveedorItemDTO[];
 }
 
@@ -155,6 +184,10 @@ export function parsearFacturaProveedorXml(xml: string): FacturaProveedorDTO {
   );
   const importeTotal = requerirNumero(navegar(inv, ['LegalMonetaryTotal', 'PayableAmount']), 'LegalMonetaryTotal/PayableAmount');
 
+  const numeroAutorizacionScop = extraerNumeroAutorizacionScop(inv);
+  const placa = textoOpcional(navegar(inv, ['Delivery', 'Shipment', 'ShipmentStage', 'TransportMeans', 'RoadTransport', 'LicensePlateID']));
+  const terminalAbastecimiento = buscarDatoAdicional(inv, '21');
+
   const lineasRaw = inv.InvoiceLine;
   const lineas = Array.isArray(lineasRaw) ? lineasRaw : lineasRaw !== undefined ? [lineasRaw] : [];
   if (lineas.length === 0) {
@@ -162,7 +195,19 @@ export function parsearFacturaProveedorXml(xml: string): FacturaProveedorDTO {
   }
   const items = lineas.map((linea, indice) => parsearLinea(linea, indice));
 
-  return { rucEmisor, nombreEmisor, rucReceptor, serieCorrelativo, fechaEmision, moneda, importeTotal, items };
+  return {
+    rucEmisor,
+    nombreEmisor,
+    rucReceptor,
+    serieCorrelativo,
+    fechaEmision,
+    moneda,
+    importeTotal,
+    numeroAutorizacionScop,
+    placa,
+    terminalAbastecimiento,
+    items,
+  };
 }
 
 function parsearXml(xml: string): Record<string, unknown> {
@@ -222,6 +267,50 @@ function requerirTexto(nodo: unknown, campo: string): string {
     throw new FacturaXmlInvalidaError(`falta el campo requerido ${campo}`);
   }
   return String(valor).trim();
+}
+
+/** v1.87 -- igual que `requerirTexto` pero sin lanzar: `null` si falta o viene vacío. */
+function textoOpcional(nodo: unknown): string | null {
+  const valor = valorDeTexto(nodo);
+  if (valor === undefined || String(valor).trim() === '') return null;
+  return String(valor).trim();
+}
+
+/**
+ * v1.87 -- `AdditionalDocumentReference/ID` (campo 31 del Anexo B, SUNAT
+ * 245-2017 -- ver nota de cabecera). Puede venir como objeto único o como
+ * array si hubiera más de uno; se toma el primero (ver nota de cabecera).
+ */
+function extraerNumeroAutorizacionScop(inv: Record<string, unknown>): string | null {
+  const raw = inv.AdditionalDocumentReference;
+  const referencias = Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [];
+  if (referencias.length === 0) return null;
+  return textoOpcional(navegar(referencias[0], ['ID']));
+}
+
+/**
+ * v1.87 -- busca `Codigo`/`Valor` dentro de `ext:UBLExtensions` ->
+ * `ext:UBLExtension[]` -> `ExtensionContent` -> `DatosAdicionales` ->
+ * `DatoAdicional[]` (extensión propietaria del PSE, no estándar UBL -- ver
+ * nota de cabecera). Recorre TODAS las `UBLExtension` presentes (la factura
+ * suele traer 2: una con `DatosAdicionales` y otra con la firma digital
+ * `ds:Signature`) en vez de asumir un índice fijo.
+ */
+function buscarDatoAdicional(inv: Record<string, unknown>, codigo: string): string | null {
+  const raw = navegar(inv, ['UBLExtensions', 'UBLExtension']);
+  const extensiones = Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [];
+  for (const extension of extensiones) {
+    const raw2 = navegar(extension, ['ExtensionContent', 'DatosAdicionales', 'DatoAdicional']);
+    const items = Array.isArray(raw2) ? raw2 : raw2 !== undefined ? [raw2] : [];
+    for (const item of items) {
+      if (item === undefined || item === null || typeof item !== 'object') continue;
+      const itemCodigo = valorDeTexto((item as Record<string, unknown>).Codigo);
+      if (itemCodigo !== undefined && String(itemCodigo).trim() === codigo) {
+        return textoOpcional((item as Record<string, unknown>).Valor);
+      }
+    }
+  }
+  return null;
 }
 
 // Firma UBL del CDR de SUNAT -- ver nota de cabecera (v1.86). Se busca en

@@ -86,6 +86,18 @@ export interface CompraOutputDTO {
    * Jorge.
    */
   readonly numeroComprobante: string | null;
+  /**
+   * v1.87 -- código de autorización del Sistema de Control de Órdenes de
+   * Pedido (SCOP, Resolución OSINERG N.° 048-2003-OS/CD) -- SOLO presente
+   * en compras del flujo de correo cuya factura lo trajera (campo UBL
+   * estándar, ver FacturaProveedorXml.ts). `null` para compras manuales o
+   * facturas que no lo traigan.
+   */
+  readonly numeroAutorizacionScop: string | null;
+  /** v1.87 -- placa del vehículo que hizo la entrega. Mismo criterio que numeroAutorizacionScop arriba. */
+  readonly placa: string | null;
+  /** v1.87 -- planta/terminal de abastecimiento de donde salió el combustible. Mismo criterio, salvo que viene de una extensión propietaria del PSE, no de un campo UBL estándar -- ver FacturaProveedorXml.ts. */
+  readonly terminalAbastecimiento: string | null;
   readonly destinos: readonly CompraDestinoDTO[];
   /** `cantidad - suma(destinos[].cantidad)` -- `null` si no hay ningún destino registrado (v1.66). */
   readonly merma: number | null;

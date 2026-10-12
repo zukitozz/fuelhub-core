@@ -603,6 +603,22 @@ components:
             entraron por el flujo de lectura de correo de proveedores; `null`
             para compras registradas manualmente (`POST /compras` no acepta
             este campo).
+        numeroAutorizacionScop:
+          type: string
+          nullable: true
+          description: >
+            v1.87 — código de autorización del Sistema de Control de Órdenes
+            de Pedido (SCOP, Resolución OSINERG N.° 048-2003-OS/CD), cuando
+            la factura del flujo de correo lo trae. `null` para compras
+            manuales o facturas que no lo incluyan.
+        placa:
+          type: string
+          nullable: true
+          description: v1.87 — placa del vehículo que hizo la entrega, cuando la factura del flujo de correo la trae.
+        terminalAbastecimiento:
+          type: string
+          nullable: true
+          description: v1.87 — planta/terminal de abastecimiento de origen, cuando la factura del flujo de correo la trae.
         destinos:
           type: array
           items:
@@ -1610,6 +1626,59 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           description: No existe ningún cierre de día ACTIVO para esa fecha (ni para la estación puntual, ni para ninguna de las estaciones del token en el caso consolidado).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /reportes/turno/documento:
+    get:
+      tags: [reportes]
+      summary: Reporte de un turno como PDF descargable (uso M2M, notificaciones por WhatsApp)
+      description: >
+        v1.85 — variante de reporte individual de turno, pensada para
+        `notificaciones-whatsapp`: devuelve una URL firmada de S3 al PDF del
+        turno, igual contrato que GET /reportes/dia/documento. A diferencia
+        de día, `estacionCodigo` es SIEMPRE obligatorio acá — solo lo
+        reciben administradores de UNA estación (el dueño del grupo no
+        recibe cierres de turno), no existe modo consolidado. El PDF se
+        genera una sola vez, apenas se registra el cierre de turno (evento
+        `CierreTurnoRegistrado`); si todavía no terminó de generarse (o el
+        cierre no existe), responde `404`.
+      operationId: obtenerReporteTurnoDocumento
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - $ref: '#/components/parameters/FechaNegocio'
+        - name: estacionCodigo
+          in: query
+          required: true
+          description: Código de la estación — obligatorio, este reporte no tiene modo consolidado.
+          schema:
+            type: string
+          example: "PACHACUTEC"
+        - name: turno
+          in: query
+          required: true
+          description: Turno puntual a reportar.
+          schema:
+            type: string
+            enum: [TURNO1, TURNO2, TURNO3]
+          example: "TURNO1"
+      responses:
+        '200':
+          description: URL firmada al PDF pre-generado de ese turno.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporteDiaDocumento'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe ningún cierre de turno ACTIVO para esa estación/fecha/turno, o el PDF todavía no terminó de generarse.
           content:
             application/json:
               schema:
