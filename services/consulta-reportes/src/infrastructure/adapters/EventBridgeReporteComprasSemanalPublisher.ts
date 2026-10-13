@@ -26,16 +26,26 @@
 // los 3 intentos fallan, se propaga el error tal cual -- el caso de uso que
 // llama a esto ya lo trata como best effort (log y seguir con la próxima
 // estación), ver GenerarReporteComprasSemanalDocumento.ts.
+//
+// v1.88 -- `source` pasa a ser un parámetro del constructor -- bug real
+// reportado por notificaciones-whatsapp el 12 oct: este cron corrió en dev
+// Y en prod el mismo lunes 8am, publicando DOS juegos de `estacionId`
+// (distintos) al mismo `notificaciones-bus`, indistinguibles entre sí
+// porque `Source` era literal `'FuelHubCloud'` sin importar el ambiente.
+// Ver `fuenteEventBridgePara` (`@fuelhub/shared-kernel`) y el mismo fix
+// aplicado a `EventBridgeCierreDiaPublisher.ts`/`EventBridgeCierreTurnoPublisher.ts`.
+// Fix complementario: `GenerarReporteComprasSemanalSchedule` (api-stack.ts)
+// ahora solo corre en prod -- dev ya ni siquiera debería llegar a llamar
+// esto, pero el `source` correcto queda igual como segunda barrera.
 
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { conReintentoConBackoff } from '@fuelhub/shared-kernel';
 import type { EventPublisherPort, ReporteComprasSemanalRegistradoEvent } from '../../application/ports/EventPublisherPort';
 
-const SOURCE = 'FuelHubCloud';
 const DETAIL_TYPE = 'ReporteComprasSemanalRegistrado';
 
 export class EventBridgeReporteComprasSemanalPublisher implements EventPublisherPort {
-  constructor(private readonly client: EventBridgeClient, private readonly busName: string) {}
+  constructor(private readonly client: EventBridgeClient, private readonly busName: string, private readonly source: string) {}
 
   async publicarReporteComprasSemanalRegistrado(evento: ReporteComprasSemanalRegistradoEvent): Promise<void> {
     await conReintentoConBackoff(() => this.publicarUnaVez(evento), {
@@ -54,7 +64,7 @@ export class EventBridgeReporteComprasSemanalPublisher implements EventPublisher
         Entries: [
           {
             EventBusName: this.busName,
-            Source: SOURCE,
+            Source: this.source,
             DetailType: DETAIL_TYPE,
             Detail: JSON.stringify(evento),
           },

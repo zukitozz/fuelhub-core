@@ -14,6 +14,7 @@ import { IdempotencyConfig, makeIdempotent } from '@aws-lambda-powertools/idempo
 import { DynamoDBPersistenceLayer } from '@aws-lambda-powertools/idempotency/dynamodb';
 import { parseAuthContext, withNormalizedIdempotencyKeyHeader } from '@fuelhub/shared-kernel';
 import { downgradeReplayStatusTo200, jsonResponse, mapErrorToResponse, type ApiResponse } from '@fuelhub/shared-kernel';
+import { fuenteEventBridgePara, type Ambiente } from '@fuelhub/shared-kernel';
 import { RegistrarCierreDia } from './application/use-cases/RegistrarCierreDia';
 import { PostgresCierreDiaIngestaRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCierreDiaIngestaRepository';
 import { EventBridgeCierreDiaPublisher } from './infrastructure/adapters/EventBridgeCierreDiaPublisher';
@@ -29,7 +30,11 @@ const rdsClient = new RDSDataClient({});
 const repo = new PostgresCierreDiaIngestaRepository(rdsClient, config);
 
 const eventBridgeClient = new EventBridgeClient({});
-const publicadorEventos = new EventBridgeCierreDiaPublisher(eventBridgeClient, requiredEnv('EVENTBRIDGE_BUS_NAME'));
+const publicadorEventos = new EventBridgeCierreDiaPublisher(
+  eventBridgeClient,
+  requiredEnv('EVENTBRIDGE_BUS_NAME'),
+  fuenteEventBridgePara(requiredEnv('AMBIENTE') as Ambiente)
+);
 
 const registrarCierreDia = new RegistrarCierreDia(repo, publicadorEventos);
 

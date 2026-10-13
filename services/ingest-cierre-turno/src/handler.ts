@@ -23,6 +23,7 @@ import { IdempotencyConfig, makeIdempotent } from '@aws-lambda-powertools/idempo
 import { DynamoDBPersistenceLayer } from '@aws-lambda-powertools/idempotency/dynamodb';
 import { parseAuthContext, withNormalizedIdempotencyKeyHeader } from '@fuelhub/shared-kernel';
 import { downgradeReplayStatusTo200, jsonResponse, mapErrorToResponse, type ApiResponse } from '@fuelhub/shared-kernel';
+import { fuenteEventBridgePara, type Ambiente } from '@fuelhub/shared-kernel';
 import { RegistrarCierreTurno } from './application/use-cases/RegistrarCierreTurno';
 import { PostgresCierreTurnoIngestaRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresCierreTurnoIngestaRepository';
 import { EventBridgeCierreTurnoPublisher } from './infrastructure/adapters/EventBridgeCierreTurnoPublisher';
@@ -38,7 +39,11 @@ const rdsClient = new RDSDataClient({});
 const repo = new PostgresCierreTurnoIngestaRepository(rdsClient, config);
 
 const eventBridgeClient = new EventBridgeClient({});
-const publicadorEventos = new EventBridgeCierreTurnoPublisher(eventBridgeClient, requiredEnv('EVENTBRIDGE_BUS_NAME'));
+const publicadorEventos = new EventBridgeCierreTurnoPublisher(
+  eventBridgeClient,
+  requiredEnv('EVENTBRIDGE_BUS_NAME'),
+  fuenteEventBridgePara(requiredEnv('AMBIENTE') as Ambiente)
+);
 
 const registrarCierreTurno = new RegistrarCierreTurno(repo, publicadorEventos);
 

@@ -19,6 +19,7 @@ import { ExcelReporteComprasSemanalRenderer } from './infrastructure/adapters/Ex
 import { S3DocumentoStorage } from './infrastructure/adapters/S3DocumentoStorage';
 import { EventBridgeReporteComprasSemanalPublisher } from './infrastructure/adapters/EventBridgeReporteComprasSemanalPublisher';
 import { sumarDias } from './domain/value-objects/RangoFechas';
+import { fuenteEventBridgePara, type Ambiente } from '@fuelhub/shared-kernel';
 
 const config: AuroraDataApiConfig = {
   resourceArn: requiredEnv('AURORA_CLUSTER_ARN'),
@@ -32,7 +33,11 @@ const renderer = new ExcelReporteComprasSemanalRenderer();
 const s3Client = new S3Client({});
 const storage = new S3DocumentoStorage(s3Client, requiredEnv('REPORTES_BUCKET_NAME'));
 const eventBridgeClient = new EventBridgeClient({});
-const eventos = new EventBridgeReporteComprasSemanalPublisher(eventBridgeClient, requiredEnv('EVENTBRIDGE_BUS_NAME'));
+const eventos = new EventBridgeReporteComprasSemanalPublisher(
+  eventBridgeClient,
+  requiredEnv('EVENTBRIDGE_BUS_NAME'),
+  fuenteEventBridgePara(requiredEnv('AMBIENTE') as Ambiente)
+);
 const generarReporteComprasSemanalDocumento = new GenerarReporteComprasSemanalDocumento(repo, renderer, storage, eventos);
 
 export const handler = async (): Promise<void> => {

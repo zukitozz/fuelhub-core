@@ -169,6 +169,7 @@ export class ApiStack extends Stack {
         ...AURORA_ENV,
         IDEMPOTENCY_TABLE_NAME: dataStack.idempotencyTable.tableName,
         EVENTBRIDGE_BUS_NAME: notificacionesBus.eventBusName,
+        AMBIENTE: props.ambiente,
       },
     });
 
@@ -187,6 +188,7 @@ export class ApiStack extends Stack {
         ...AURORA_ENV,
         IDEMPOTENCY_TABLE_NAME: dataStack.idempotencyTable.tableName,
         EVENTBRIDGE_BUS_NAME: notificacionesBus.eventBusName,
+        AMBIENTE: props.ambiente,
       },
     });
 
@@ -725,6 +727,7 @@ export class ApiStack extends Stack {
         ...AURORA_ENV,
         REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
         EVENTBRIDGE_BUS_NAME: notificacionesBus.eventBusName,
+        AMBIENTE: props.ambiente,
       },
     });
 
@@ -733,12 +736,25 @@ export class ApiStack extends Stack {
     notificacionesBus.grantPutEventsTo(generarReporteComprasSemanal);
 
     // Lunes 13:00 UTC = 8:00 hora Perú (UTC-5) -- mismo horario en dev y
-    // prod, a diferencia del cron de ingest-compra-correo (que sí varía por
-    // ambiente, ver más abajo): acá no hay el mismo riesgo de "dos
-    // ambientes compitiendo por el mismo recurso externo", cada ambiente
-    // lee su propia Aurora.
+    // prod.
+    //
+    // v1.88 -- `enabled: props.ambiente === 'prod'` agregado tras bug real
+    // reportado por notificaciones-whatsapp el 12 oct: el razonamiento
+    // original de este comentario ("cada ambiente lee su propia Aurora, no
+    // hay riesgo de dos ambientes compitiendo por el mismo recurso
+    // externo") solo miraba el lado de los DATOS -- sí, cada ambiente lee
+    // su propia Aurora, eso nunca fue el problema. El problema es que
+    // ambos ambientes PUBLICAN al mismo `notificaciones-bus` compartido
+    // (ver `notificacionesBus` arriba) -- el cron corrió en dev Y en prod
+    // el mismo lunes 8am, publicando dos juegos de `estacionId` distintos
+    // bajo el mismo `Source` literal, indistinguibles para las reglas de
+    // notificaciones-whatsapp. Ahora solo corre en prod; el fix de
+    // `fuenteEventBridgePara` (`@fuelhub/shared-kernel`, ver
+    // EventBridgeReporteComprasSemanalPublisher.ts) queda como segunda
+    // barrera por si este Lambda se invoca a mano en dev para debugging.
     new events.Rule(this, 'GenerarReporteComprasSemanalSchedule', {
       schedule: events.Schedule.cron({ weekDay: 'MON', hour: '13', minute: '0' }),
+      enabled: props.ambiente === 'prod',
       targets: [new targets.LambdaFunction(generarReporteComprasSemanal)],
     });
 

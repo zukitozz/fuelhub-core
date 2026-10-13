@@ -3,19 +3,23 @@
 // Único lugar que conoce el SDK de EventBridge para este Lambda (v1.85) --
 // calco exacto de `ingest-cierre-dia/infrastructure/adapters/EventBridgeCierreDiaPublisher.ts`.
 // `Source` es el mismo bus/fuente que ya usa `CierreDiaRegistrado`
-// (`notificaciones-bus`, `Source = 'FuelHubCloud'`) -- confirmado con
-// notificaciones-whatsapp que es "mismo bus, misma fuente y mismo mecanismo
-// de publicación que hoy usan para CierreDiaRegistrado". Solo cambia
-// `DetailType`.
+// (`notificaciones-bus`, `Source = 'FuelHubCloud'` en prod) -- confirmado
+// con notificaciones-whatsapp que es "mismo bus, misma fuente y mismo
+// mecanismo de publicación que hoy usan para CierreDiaRegistrado". Solo
+// cambia `DetailType`.
+//
+// v1.88 -- `source` pasa a ser un parámetro del constructor -- ver la nota
+// de cabecera equivalente en `EventBridgeCierreDiaPublisher.ts` (mismo bug,
+// mismo fix: dev y prod comparten bus, `fuenteEventBridgePara(ambiente)` de
+// `@fuelhub/shared-kernel` resuelve el valor correcto por ambiente).
 
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import type { CierreTurnoRegistradoEvent, EventPublisherPort } from '../../application/ports/EventPublisherPort';
 
-const SOURCE = 'FuelHubCloud';
 const DETAIL_TYPE = 'CierreTurnoRegistrado';
 
 export class EventBridgeCierreTurnoPublisher implements EventPublisherPort {
-  constructor(private readonly client: EventBridgeClient, private readonly busName: string) {}
+  constructor(private readonly client: EventBridgeClient, private readonly busName: string, private readonly source: string) {}
 
   async publicarCierreTurnoRegistrado(evento: CierreTurnoRegistradoEvent): Promise<void> {
     const resultado = await this.client.send(
@@ -23,7 +27,7 @@ export class EventBridgeCierreTurnoPublisher implements EventPublisherPort {
         Entries: [
           {
             EventBusName: this.busName,
-            Source: SOURCE,
+            Source: this.source,
             DetailType: DETAIL_TYPE,
             Detail: JSON.stringify(evento),
           },
