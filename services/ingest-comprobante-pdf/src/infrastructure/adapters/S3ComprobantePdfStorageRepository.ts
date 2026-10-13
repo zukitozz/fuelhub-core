@@ -23,6 +23,15 @@
 // version quedan bajo la key vieja -- esta clase, desde ahora, solo escribe
 // bajo la key nueva; la key vieja sigue siendo LEIDA por
 // S3ComprobanteLecturaRepository.ts (consulta-comprobante) sin cambios.
+//
+// v1.89: si el payload trae xmlBuffer/cdrBuffer (ver ComprobantePdfInput.ts),
+// se suben bajo el mismo prefijo que el PDF, mismo nombre base, cambiando
+// solo la extension -- `{...}/{numeracion}.xml` y `{...}/{numeracion}-cdr.xml`.
+// Los 3 PutObject corren en paralelo (Promise.all): no hay dependencia de
+// orden entre ellos, y ya habia precedente de hacerlo asi en
+// S3ComprobantePeriodoLecturaRepository.ts (GetObject en paralelo al armar
+// el zip). Si uno falla, el `Promise.all` rechaza y el handler responde
+// error -- no hay escritura parcial "silenciosa" que deje PDF sin su XML.
 
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type { ComprobanteMetadata } from '../../domain/ComprobantePdfInput';
@@ -38,9 +47,14 @@ export class S3ComprobantePdfStorageRepository implements ComprobantePdfStorageR
     numeracion: string;
     buffer: Buffer;
     metadata: ComprobanteMetadata;
+    xmlBuffer?: Buffer;
+    cdrBuffer?: Buffer;
   }) {
     const [anio, mes, dia] = params.fechaEmision.split('-');
-    const key = `${params.ruc}/${params.numeroDocumentoReceptor}/${anio}/${mes}/${dia}/${params.numeracion}.pdf`;
+    const prefijo = `${params.ruc}/${params.numeroDocumentoReceptor}/${anio}/${mes}/${dia}/${params.numeracion}`;
+    const key = `${prefijo}.pdf`;
+    const keyXml = params.xmlBuffer ? `${prefijo}.xml` : undefined;
+    const keyCdr = params.cdrBuffer ? `${prefijo}-cdr.xml` : undefined;
 
     const s3Metadata: Record<string, string> = {};
     if (params.metadata.fechaEmision !== undefined) s3Metadata['fecha-emision'] = params.metadata.fechaEmision;
@@ -48,15 +62,28 @@ export class S3ComprobantePdfStorageRepository implements ComprobantePdfStorageR
     if (params.metadata.moneda !== undefined) s3Metadata['moneda'] = params.metadata.moneda;
     if (params.metadata.estadoSunat !== undefined) s3Metadata['estado-sunat'] = params.metadata.estadoSunat;
 
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.bucketName,
-        Key: key,
-        Body: params.buffer,
-        ContentType: 'application/pdf',
-        ...(Object.keys(s3Metadata).length > 0 ? { Metadata: s3Metadata } : {}),
-      })
-    );
-    return { key };
+    await Promise.all([
+      this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          Body: params.buffer,
+          ContentType: 'application/pdf',
+          ...(Object.keys(s3Metadata).length > 0 ? { Metadata: s3Metadata } : {}),
+        })
+      ),
+      keyXml
+        ? this.client.send(
+            new PutObjectCommand({ Bucket: this.bucketName, Key: keyXml, Body: params.xmlBuffer, ContentType: 'application/xml' })
+          )
+        : Promise.resolve(),
+      keyCdr
+        ? this.client.send(
+            new PutObjectCommand({ Bucket: this.bucketName, Key: keyCdr, Body: params.cdrBuffer, ContentType: 'application/xml' })
+          )
+        : Promise.resolve(),
+    ]);
+
+    return { key, keyXml, keyCdr };
   }
 }

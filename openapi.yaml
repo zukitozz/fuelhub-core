@@ -1342,16 +1342,18 @@ paths:
       tags: [comprobantes]
       summary: Subir el PDF de un comprobante
       description: >
-        v1.69 -- sube (o reemplaza) el PDF ya generado del comprobante a S3.
-        Idempotente de forma natural -- subir el mismo PDF dos veces pisa el
-        mismo objeto, sin necesidad de Idempotency-Key. Reusa a propósito el
-        scope `cierres.write` (no uno propio de comprobantes) para funcionar
-        de inmediato con las credenciales M2M que `fuelhub-facturador` ya
-        tiene en producción. Lambda `ingest-comprobante-pdf`. La key de S3
-        se arma como `{ruc}/{numeracion}.pdf` -- ver
-        specs-cierres-grifo-backend.md sección 3.8.9 para el detalle
-        completo y el plan de XML/CDR (pendiente, no implementado en esta
-        entrada).
+        Sube (o reemplaza) el PDF ya generado del comprobante a S3.
+        Idempotente de forma natural -- subir el mismo comprobante dos veces
+        pisa los mismos objetos, sin necesidad de Idempotency-Key. Reusa a
+        propósito el scope `cierres.write` (no uno propio de comprobantes)
+        para funcionar de inmediato con las credenciales M2M que
+        `fuelhub-facturador` ya tiene en producción. Lambda
+        `ingest-comprobante-pdf`. La key de S3 se arma como
+        `{ruc}/{numeroDocumentoReceptor}/{yyyy}/{mm}/{dd}/{numeracion}.pdf`
+        (v1.79) -- permite listado masivo por emisor+receptor+periodo vía
+        `GET /comprobantes/periodo`. v1.89 agrega `xmlBase64`/`cdrBase64`
+        (ambos opcionales): si vienen, se suben bajo el mismo prefijo que el
+        PDF (`{...}.xml`, `{...}-cdr.xml`).
       operationId: subirComprobantePdf
       x-required-scope: fuelhub-api/cierres.write
       parameters:
@@ -1367,15 +1369,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [codigoEstacion, ruc, contentBase64]
+              required: [codigoEstacion, ruc, numeroDocumentoReceptor, contentBase64, fechaEmision]
               properties:
                 codigoEstacion:
                   type: string
                   description: Validado contra custom:station_scope del token (sección 5.4) -- nunca se confía en el payload por sí solo.
                 ruc:
                   type: string
-                  description: RUC (11 dígitos) del emisor del comprobante -- junto con `numeracion` (serie-correlativo) arma la key de S3, para poder ubicar comprobantes por el criterio combinado ruc-serie-correlativo.
+                  description: RUC (11 dígitos) del emisor del comprobante -- estructural para la key de S3 (v1.79).
                   example: '20123456789'
+                numeroDocumentoReceptor:
+                  type: string
+                  description: RUC/DNI/etc. del receptor del comprobante -- requerido desde v1.79, estructural para la key de S3 (listado masivo por emisor+receptor+periodo).
+                  example: '10456789123'
                 contentBase64:
                   type: string
                   description: PDF completo codificado en base64. Máximo 7 MB decodificados (~9.3 MB en base64, dentro del límite duro de 10 MB de payload de API Gateway REST).
@@ -1383,27 +1389,33 @@ paths:
                   type: string
                   format: date
                   description: >-
-                    Opcional (v1.72) -- fuelhub-facturador todavía no lo manda.
-                    Si viene, queda disponible para GET /comprobantes/{numeracion}.
+                    Requerido desde v1.79 -- estructural para la key de S3
+                    (yyyy/mm/dd), no solo informativo.
                   example: '2026-09-10'
                 importeTotal:
                   type: number
                   format: double
                   minimum: 0
-                  description: Opcional (v1.72), igual que fechaEmision.
+                  description: Opcional (v1.72) -- se guarda como S3 object metadata, nunca en Postgres.
                   example: 125.50
                 moneda:
                   type: string
                   enum: [PEN, USD]
-                  description: Opcional (v1.72), igual que fechaEmision.
+                  description: Opcional (v1.72), igual que importeTotal.
                   example: PEN
                 estadoSunat:
                   type: string
-                  description: Opcional (v1.72), igual que fechaEmision. Texto libre (p. ej. "ACEPTADO").
+                  description: Opcional (v1.72), igual que importeTotal. Texto libre (p. ej. "ACEPTADO").
                   example: ACEPTADO
+                xmlBase64:
+                  type: string
+                  description: Opcional (v1.89) -- XML UBL del comprobante (el enviado a SUNAT), codificado en base64. Máximo 2 MB decodificados.
+                cdrBase64:
+                  type: string
+                  description: Opcional (v1.89) -- Constancia de Recepción (CDR) que devuelve SUNAT, codificada en base64. Máximo 2 MB decodificados.
       responses:
         '201':
-          description: PDF subido.
+          description: PDF (y XML/CDR si vinieron) subidos.
           content:
             application/json:
               schema:
@@ -1415,6 +1427,12 @@ paths:
                     type: string
                   key:
                     type: string
+                  keyXml:
+                    type: string
+                    description: Solo presente si el payload trajo xmlBase64 (v1.89).
+                  keyCdr:
+                    type: string
+                    description: Solo presente si el payload trajo cdrBase64 (v1.89).
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1734,6 +1752,117 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           description: No existe ningún reporte generado para esa estación/semana (semana todavía no procesada por el cron, o fechaInicio que no corresponde a ningún lunes ya reportado).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /reportes/top-facturas:
+    post:
+      tags: [reportes]
+      summary: Registrar el reporte semanal de top-20 clientes por facturación (control antifraude)
+      description: >
+        v1.89 — lo manda `fuelhub-local` una vez por semana por estación, con
+        el top de clientes que más facturaron (hasta 20) y, por cada
+        factura, qué despachador la generó — pedido de Jorge para detectar
+        personal que "vende" facturas a ciertos clientes. `fuelhub-core` no
+        recalcula nada: solo valida, guarda el detalle completo en S3 y
+        publica `ReporteTopFacturasRegistrado` a EventBridge (resumen por
+        cliente, no el detalle factura-por-factura). Push-based, sin cron de
+        este lado — mismo criterio que POST /cierres-dia/POST /cierres-turno,
+        a propósito para no depender de que un cron de acá adivine si el job
+        de allá ya terminó. Requiere `Idempotency-Key` (igual que
+        cierres-dia/turno): reintentar sin este header duplicaría la
+        notificación de WhatsApp.
+      operationId: registrarReporteTopFacturas
+      x-required-scope: fuelhub-api/cierres.write
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [codigoEstacion, semanaInicio, top]
+              properties:
+                codigoEstacion:
+                  type: string
+                  description: Validado contra custom:station_scope del token (sección 5.4).
+                semanaInicio:
+                  type: string
+                  format: date
+                  description: Lunes de la semana que resume el reporte.
+                  example: '2026-10-06'
+                top:
+                  type: array
+                  maxItems: 20
+                  description: Hasta 20 clientes, ordenados por quien calcula el reporte (fuelhub-local) — fuelhub-core no reordena.
+                  items:
+                    type: object
+                    required: [numeroDocumentoCliente, nombreCliente, totalSoles, facturas]
+                    properties:
+                      numeroDocumentoCliente:
+                        type: string
+                        example: '20123456789'
+                      nombreCliente:
+                        type: string
+                        example: Transportes ABC SAC
+                      totalSoles:
+                        type: number
+                        format: double
+                        minimum: 0
+                      facturas:
+                        type: array
+                        minItems: 1
+                        items:
+                          type: object
+                          required: [numeracion, fecha, monto, despachadorNombre, despachadorDocumento]
+                          properties:
+                            numeracion:
+                              type: string
+                              example: F001-000123
+                            fecha:
+                              type: string
+                              format: date
+                            monto:
+                              type: number
+                              format: double
+                              minimum: 0
+                            despachadorNombre:
+                              type: string
+                              example: Juan Perez
+                            despachadorDocumento:
+                              type: string
+                              description: DNI del despachador, 8 dígitos.
+                              example: '12345678'
+      responses:
+        '201':
+          description: Reporte guardado (y evento publicado, best effort).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  codigoEstacion:
+                    type: string
+                  semanaInicio:
+                    type: string
+                  key:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: codigoEstacion no corresponde a ninguna estación activa.
           content:
             application/json:
               schema:

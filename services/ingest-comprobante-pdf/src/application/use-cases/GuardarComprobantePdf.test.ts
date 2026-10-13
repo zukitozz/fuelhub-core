@@ -28,6 +28,8 @@ class RepoFake implements ComprobantePdfStorageRepository {
     numeracion: string;
     buffer: Buffer;
     metadata: ComprobanteMetadata;
+    xmlBuffer?: Buffer;
+    cdrBuffer?: Buffer;
   }> = [];
 
   async guardar(params: {
@@ -37,10 +39,17 @@ class RepoFake implements ComprobantePdfStorageRepository {
     numeracion: string;
     buffer: Buffer;
     metadata: ComprobanteMetadata;
+    xmlBuffer?: Buffer;
+    cdrBuffer?: Buffer;
   }): Promise<ComprobantePdfGuardadoDTO> {
     this.llamadas.push(params);
     const [anio, mes, dia] = params.fechaEmision.split('-');
-    return { key: `${params.ruc}/${params.numeroDocumentoReceptor}/${anio}/${mes}/${dia}/${params.numeracion}.pdf` };
+    const prefijo = `${params.ruc}/${params.numeroDocumentoReceptor}/${anio}/${mes}/${dia}/${params.numeracion}`;
+    return {
+      key: `${prefijo}.pdf`,
+      keyXml: params.xmlBuffer ? `${prefijo}.xml` : undefined,
+      keyCdr: params.cdrBuffer ? `${prefijo}-cdr.xml` : undefined,
+    };
   }
 }
 
@@ -112,5 +121,36 @@ describe('GuardarComprobantePdf', () => {
       moneda: undefined,
       estadoSunat: undefined,
     });
+  });
+
+  it('pasa xmlBuffer/cdrBuffer al repo y devuelve keyXml/keyCdr cuando el payload los trae (v1.89)', async () => {
+    const repo = new RepoFake();
+    const caso = new GuardarComprobantePdf(repo);
+    const xml = Buffer.from('<Invoice></Invoice>').toString('base64');
+    const cdr = Buffer.from('<ApplicationResponse></ApplicationResponse>').toString('base64');
+
+    const resultado = await caso.ejecutar(authDe('*'), 'F001-000123', inputValido({ xmlBase64: xml, cdrBase64: cdr }));
+
+    expect(repo.llamadas[0]?.xmlBuffer?.toString('utf-8')).toBe('<Invoice></Invoice>');
+    expect(repo.llamadas[0]?.cdrBuffer?.toString('utf-8')).toBe('<ApplicationResponse></ApplicationResponse>');
+    expect(resultado).toEqual({
+      codigoEstacion: 'CHANCAYLLO',
+      numeracion: 'F001-000123',
+      key: '20123456789/10456789123/2026/09/10/F001-000123.pdf',
+      keyXml: '20123456789/10456789123/2026/09/10/F001-000123.xml',
+      keyCdr: '20123456789/10456789123/2026/09/10/F001-000123-cdr.xml',
+    });
+  });
+
+  it('no pasa xmlBuffer/cdrBuffer al repo cuando el payload no los trae -- keyXml/keyCdr quedan undefined (v1.89)', async () => {
+    const repo = new RepoFake();
+    const caso = new GuardarComprobantePdf(repo);
+
+    const resultado = await caso.ejecutar(authDe('*'), 'F001-000123', inputValido());
+
+    expect(repo.llamadas[0]?.xmlBuffer).toBeUndefined();
+    expect(repo.llamadas[0]?.cdrBuffer).toBeUndefined();
+    expect(resultado.keyXml).toBeUndefined();
+    expect(resultado.keyCdr).toBeUndefined();
   });
 });

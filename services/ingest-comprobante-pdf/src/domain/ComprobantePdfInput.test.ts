@@ -1,11 +1,16 @@
 // domain/ComprobantePdfInput.test.ts
-import { validarYDecodificarComprobantePdf, MAX_PDF_BYTES, type ComprobantePdfInput } from './ComprobantePdfInput';
+import { validarYDecodificarComprobantePdf, MAX_PDF_BYTES, MAX_XML_BYTES, type ComprobantePdfInput } from './ComprobantePdfInput';
 import { ParametrosInvalidosError } from '@fuelhub/shared-kernel';
 
 function pdfBase64(bytesExtra = 0): string {
   const header = Buffer.from('%PDF-1.4\n%%EOF');
   const relleno = Buffer.alloc(bytesExtra, 0x41);
   return Buffer.concat([header, relleno]).toString('base64');
+}
+
+function xmlBase64(bytesExtra = 0): string {
+  const contenido = `<Invoice>${'x'.repeat(bytesExtra)}</Invoice>`;
+  return Buffer.from(contenido).toString('base64');
 }
 
 function inputValido(overrides: Partial<ComprobantePdfInput> = {}): ComprobantePdfInput {
@@ -141,5 +146,52 @@ describe('validarYDecodificarComprobantePdf', () => {
     expect(() => validarYDecodificarComprobantePdf(inputValido({ estadoSunat: '   ' }), 'F001-000123')).toThrow(
       ParametrosInvalidosError
     );
+  });
+
+  it('xmlBuffer/cdrBuffer quedan undefined cuando no se mandan (v1.89)', () => {
+    const resultado = validarYDecodificarComprobantePdf(inputValido(), 'F001-000123');
+    expect(resultado.xmlBuffer).toBeUndefined();
+    expect(resultado.cdrBuffer).toBeUndefined();
+  });
+
+  it('acepta y decodifica xmlBase64/cdrBase64 cuando vienen validos (v1.89)', () => {
+    const resultado = validarYDecodificarComprobantePdf(
+      inputValido({ xmlBase64: xmlBase64(), cdrBase64: xmlBase64() }),
+      'F001-000123'
+    );
+    expect(resultado.xmlBuffer?.toString('utf-8')).toBe('<Invoice></Invoice>');
+    expect(resultado.cdrBuffer?.toString('utf-8')).toBe('<Invoice></Invoice>');
+  });
+
+  it('rechaza xmlBase64 que no decodifica a XML (no empieza con "<") (v1.89)', () => {
+    const basura = Buffer.from('esto no es xml').toString('base64');
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ xmlBase64: basura }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('rechaza cdrBase64 que no decodifica a XML (no empieza con "<") (v1.89)', () => {
+    const basura = Buffer.from('esto no es xml').toString('base64');
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ cdrBase64: basura }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('rechaza xmlBase64 que decodifica a un buffer vacio (v1.89)', () => {
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ xmlBase64: '====' }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('rechaza xmlBase64 que excede MAX_XML_BYTES (v1.89)', () => {
+    const grande = xmlBase64(MAX_XML_BYTES);
+    expect(() => validarYDecodificarComprobantePdf(inputValido({ xmlBase64: grande }), 'F001-000123')).toThrow(
+      ParametrosInvalidosError
+    );
+  });
+
+  it('acepta un xmlBase64 vacio/blanco como "no mandado" en vez de rechazarlo (v1.89)', () => {
+    const resultado = validarYDecodificarComprobantePdf(inputValido({ xmlBase64: '   ' }), 'F001-000123');
+    expect(resultado.xmlBuffer).toBeUndefined();
   });
 });

@@ -11,11 +11,18 @@
 // v1.79: `guardar` tambien recibe `numeroDocumentoReceptor`+`fechaEmision`
 // -- estructurales para la key nueva (ver S3ComprobantePdfStorageRepository.ts
 // y la nota de cabecera de ComprobantePdfInput.ts).
+//
+// v1.89: `guardar` tambien recibe `xmlBuffer`/`cdrBuffer` opcionales -- ver
+// la nota de cabecera de ComprobantePdfInput.ts. El DTO devuelve `keyXml`/
+// `keyCdr` solo si esos buffers vinieron (mismo criterio que la metadata
+// opcional).
 
 import type { ComprobanteMetadata } from '../../domain/ComprobantePdfInput';
 
 export interface ComprobantePdfGuardadoDTO {
   readonly key: string;
+  readonly keyXml?: string;
+  readonly keyCdr?: string;
 }
 
 export interface ComprobantePdfStorageRepository {
@@ -26,5 +33,7 @@ export interface ComprobantePdfStorageRepository {
     readonly numeracion: string;
     readonly buffer: Buffer;
     readonly metadata: ComprobanteMetadata;
+    readonly xmlBuffer?: Buffer;
+    readonly cdrBuffer?: Buffer;
   }): Promise<ComprobantePdfGuardadoDTO>;
 }

@@ -53,6 +53,17 @@
 // en los listados masivos nuevos. Decisión explícita de Jorge: no se hace
 // backfill (no hay forma confiable de recuperar el receptor de un PDF ya
 // subido sin volver a leer su XML original, que este repo no guarda).
+//
+// v1.89 -- `xmlBase64`/`cdrBase64` (ambos opcionales, igual criterio que los
+// 3 campos de metadata de v1.72: viejas versiones de fuelhub-facturador que
+// no los mandan siguen funcionando igual que antes). Guardan el XML UBL del
+// comprobante (el que se le envía a SUNAT) y la CDR (constancia de
+// recepción) que SUNAT devuelve -- esto es lo que en S3ComprobantePdfStorageRepository.ts
+// se venía dejando "el terreno listo" desde v1.72 sin implementar. Validación
+// liviana (igual que `%PDF-` para el PDF): no son un parser XML completo,
+// solo confirman que no se está subiendo basura bajo pretexto de XML -- el
+// parseo real (si alguna vez hace falta) es responsabilidad de quien lea
+// estos archivos después, no de este endpoint de escritura.
 
 import { ParametrosInvalidosError, type DetalleValidacion } from '@fuelhub/shared-kernel';
 
@@ -67,6 +78,10 @@ export interface ComprobantePdfInput {
   readonly importeTotal?: number;
   readonly moneda?: string;
   readonly estadoSunat?: string;
+  /** XML UBL del comprobante (el enviado a SUNAT) -- opcional, v1.89, ver nota de cabecera. */
+  readonly xmlBase64?: string;
+  /** Constancia de recepción (CDR) que devuelve SUNAT -- opcional, v1.89, ver nota de cabecera. */
+  readonly cdrBase64?: string;
 }
 
 /** Metadata opcional del comprobante (solo lo que se adjunta como S3 object metadata, v1.72). */
@@ -84,9 +99,13 @@ export interface ComprobantePdfValidado {
   readonly numeroDocumentoReceptor: string;
   readonly fechaEmision: string;
   readonly metadata: ComprobanteMetadata;
+  /** v1.89 -- presentes solo si el payload trajo xmlBase64/cdrBase64, ver nota de cabecera. */
+  readonly xmlBuffer?: Buffer;
+  readonly cdrBuffer?: Buffer;
 }
 
 export const MAX_PDF_BYTES = 7 * 1024 * 1024; // 7 MB decodificados -- ver nota de cabecera sobre el limite de API Gateway
+export const MAX_XML_BYTES = 2 * 1024 * 1024; // 2 MB decodificados -- un XML UBL/CDR real pesa decenas/cientos de KB, deja margen de sobra sin abrir la puerta a abuso
 
 const RUC_REGEX = /^\d{11}$/;
 const FECHA_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -197,11 +216,50 @@ export function validarYDecodificarComprobantePdf(
     ]);
   }
 
+  const xmlBuffer = decodificarXmlOpcional(errores, 'xmlBase64', input.xmlBase64);
+  const cdrBuffer = decodificarXmlOpcional(errores, 'cdrBase64', input.cdrBase64);
+
+  if (errores.length > 0) {
+    throw new ParametrosInvalidosError('El payload no paso la validacion.', errores);
+  }
+
   return {
     buffer,
     ruc: input.ruc.trim(),
     numeroDocumentoReceptor: input.numeroDocumentoReceptor.trim(),
     fechaEmision: fechaEmision!,
     metadata: { fechaEmision: fechaEmision!, importeTotal, moneda, estadoSunat },
+    xmlBuffer,
+    cdrBuffer,
   };
+}
+
+/** v1.89 -- decodifica y valida livianamente xmlBase64/cdrBase64 (ambos opcionales, mismo campo en errores[] que el resto de la funcion). */
+function decodificarXmlOpcional(errores: DetalleValidacion[], field: 'xmlBase64' | 'cdrBase64', valor: string | undefined): Buffer | undefined {
+  if (valor === undefined || valor === null || valor.trim() === '') return undefined;
+
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(valor, 'base64');
+  } catch {
+    errores.push({ field, issue: 'base64 malformado' });
+    return undefined;
+  }
+
+  if (buffer.length === 0) {
+    errores.push({ field, issue: 'vacio tras decodificar' });
+    return undefined;
+  }
+  if (buffer.length > MAX_XML_BYTES) {
+    errores.push({ field, issue: `${buffer.length} bytes, maximo ${MAX_XML_BYTES}` });
+    return undefined;
+  }
+  // Firma minima: el primer caracter no-blanco debe abrir una etiqueta --
+  // no es un parser XML completo, ver nota de cabecera.
+  if (buffer.toString('utf-8').trimStart()[0] !== '<') {
+    errores.push({ field, issue: 'no parece ser XML valido (no empieza con "<")' });
+    return undefined;
+  }
+
+  return buffer;
 }

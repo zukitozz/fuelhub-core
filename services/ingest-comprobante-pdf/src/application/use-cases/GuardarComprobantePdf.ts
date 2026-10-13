@@ -14,6 +14,8 @@ export interface ComprobantePdfGuardadoResultado {
   readonly codigoEstacion: string;
   readonly numeracion: string;
   readonly key: string;
+  readonly keyXml?: string;
+  readonly keyCdr?: string;
 }
 
 export class GuardarComprobantePdf {
@@ -24,7 +26,8 @@ export class GuardarComprobantePdf {
     numeracion: string | undefined,
     input: ComprobantePdfInput
   ): Promise<ComprobantePdfGuardadoResultado> {
-    const { buffer, ruc, numeroDocumentoReceptor, fechaEmision, metadata } = validarYDecodificarComprobantePdf(input, numeracion);
+    const { buffer, ruc, numeroDocumentoReceptor, fechaEmision, metadata, xmlBuffer, cdrBuffer } =
+      validarYDecodificarComprobantePdf(input, numeracion);
 
     // Autorizacion por estacion (5.4): nunca se confia en que el payload
     // diga la verdad por si solo -- se compara contra custom:station_scope
@@ -35,15 +38,17 @@ export class GuardarComprobantePdf {
       throw new AccesoDenegadoEstacionError(input.codigoEstacion);
     }
 
-    const { key } = await this.repo.guardar({
+    const { key, keyXml, keyCdr } = await this.repo.guardar({
       ruc,
       numeroDocumentoReceptor,
       fechaEmision,
       numeracion: numeracion!,
       buffer,
       metadata,
+      xmlBuffer,
+      cdrBuffer,
     });
 
-    return { codigoEstacion: input.codigoEstacion, numeracion: numeracion!, key };
+    return { codigoEstacion: input.codigoEstacion, numeracion: numeracion!, key, keyXml, keyCdr };
   }
 }

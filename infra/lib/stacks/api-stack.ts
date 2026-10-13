@@ -527,6 +527,15 @@ export class ApiStack extends Stack {
           prefix: 'reportes-semanal/',
           expiration: Duration.days(2),
         },
+        // v1.89 -- reporte top-facturas (control antifraude, ver
+        // ReporteTopFacturasKey.ts): 30 días, NO 2 como reportes-semanal --
+        // a diferencia de ese reporte operativo, este es un registro que
+        // puede hacer falta revisar después de la semana en que se generó
+        // (seguimiento de un despachador, no "una vez visto se descarta").
+        {
+          prefix: 'top-facturas/',
+          expiration: Duration.days(30),
+        },
       ],
     });
 
@@ -757,6 +766,53 @@ export class ApiStack extends Stack {
       enabled: props.ambiente === 'prod',
       targets: [new targets.LambdaFunction(generarReporteComprasSemanal)],
     });
+
+    // --- ingest-reporte-top-facturas: POST /reportes/top-facturas (v1.89) ------
+    // Control antifraude pedido por Jorge: `fuelhub-local` calcula, con su
+    // propia base local, el top-20 semanal de clientes por facturación y
+    // qué despachador generó cada factura -- fuelhub-core no tiene (ni
+    // necesita) visibilidad de los datos de venta de fuelhub-local para
+    // calcular esto, solo recibe el resultado ya armado.
+    //
+    // A diferencia de GenerarReporteComprasSemanal (cron de este lado), acá
+    // NO hay cron propio -- es push-based, igual que cierres-dia/turno: el
+    // propio POST de fuelhub-local dispara el guardado y la notificación.
+    // Esto evita a propósito el problema de sincronización "¿el cron de acá
+    // corre antes de que el job de allá haya terminado?" (discutido con
+    // Jorge) -- no hay nada de este lado adivinando una hora fija.
+    //
+    // Idempotente por `Idempotency-Key` (igual que cierres-dia/turno, NO
+    // como ingest-comprobante-pdf): el PUT a S3 ya sería idempotente por sí
+    // solo, pero publicar el evento es un efecto secundario que SÍ se
+    // duplicaría con un reintento HTTP sin esto -- ver la nota de cabecera
+    // de RegistrarReporteTopFacturas.ts.
+    const reportesTopFacturas = reportes.addResource('top-facturas');
+
+    const ingestReporteTopFacturas = new AuthenticatedEndpoint(this, 'IngestReporteTopFacturas', {
+      api,
+      authorizer,
+      resource: reportesTopFacturas,
+      method: 'POST',
+      entry: entryDe('ingest-reporte-top-facturas'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      // Reusa cierres.write a propósito, mismo criterio documentado en
+      // SPEC-ingest-comprobante-pdf.md sección 3: funciona de inmediato con
+      // las credenciales M2M que fuelhub-local ya tiene en producción.
+      requiredScope: 'fuelhub-api/cierres.write',
+      environment: {
+        ...AURORA_ENV,
+        IDEMPOTENCY_TABLE_NAME: dataStack.idempotencyTable.tableName,
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+        EVENTBRIDGE_BUS_NAME: notificacionesBus.eventBusName,
+        AMBIENTE: props.ambiente,
+      },
+    });
+
+    reportesDocumentosBucket.grantWrite(ingestReporteTopFacturas.fn);
+    dataStack.cluster.grantDataApiAccess(ingestReporteTopFacturas.fn);
+    dataStack.idempotencyTable.grantReadWriteData(ingestReporteTopFacturas.fn);
+    notificacionesBus.grantPutEventsTo(ingestReporteTopFacturas.fn);
 
     // --- ingestCompraCorreo: Lambda por cron (v1.81, sin ruta de API) ----------
     // Lee facturas de proveedores de un buzón de Gmail (etiqueta
