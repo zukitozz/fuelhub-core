@@ -7,3 +7,4 @@ export * from './dto/CierreDia';
 export * from './rds-retry';
 export * from './retry-con-backoff';
 export * from './eventbridge-source';
+export * from './reporte-top-facturas-key';

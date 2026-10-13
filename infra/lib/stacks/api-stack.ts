@@ -90,6 +90,14 @@ function entryComprasSemanalDocumentoDe(servicio: string): string {
 function entryGenerarComprasSemanalDe(servicio: string): string {
   return path.join(SERVICES_ROOT, servicio, 'src', 'handler-generar-compras-semanal.ts');
 }
+// entryTopFacturasDocumentoDe -- v1.89, GET /reportes/top-facturas/documento
+// -- mismo criterio que entryComprasSemanalDocumentoDe arriba, pero SIN un
+// "entryGenerar..." propio: acá no hay Lambda de generación aparte, el
+// Excel se genera en ingest-reporte-top-facturas (otro servicio, dentro del
+// mismo POST que recibe el reporte) -- ver RegistrarReporteTopFacturas.ts.
+function entryTopFacturasDocumentoDe(servicio: string): string {
+  return path.join(SERVICES_ROOT, servicio, 'src', 'handler-top-facturas-documento.ts');
+}
 
 export interface ApiStackProps extends StackProps {
   readonly grupoId: string;
@@ -813,6 +821,32 @@ export class ApiStack extends Stack {
     dataStack.cluster.grantDataApiAccess(ingestReporteTopFacturas.fn);
     dataStack.idempotencyTable.grantReadWriteData(ingestReporteTopFacturas.fn);
     notificacionesBus.grantPutEventsTo(ingestReporteTopFacturas.fn);
+
+    // --- consulta-reportes: GET /reportes/top-facturas/documento (v1.89) -------
+    // Botón "Ver reporte" de notificaciones-whatsapp -- mismo criterio que
+    // día/turno/compras-semanal (comentario de Jorge: el Excel lo genera y
+    // guarda fuelhub-core, notificaciones-whatsapp solo pide la URL firmada,
+    // no arma su propio reporte a partir del resumen del evento). Sin
+    // Lambda de generación propio en este servicio (a diferencia de
+    // dia/turno) -- el Excel ya lo generó y subió ingest-reporte-top-facturas
+    // en el mismo POST, ver RegistrarReporteTopFacturas.ts.
+    const reportesTopFacturasDocumento = reportesTopFacturas.addResource('documento');
+
+    const consultaReportesTopFacturasDocumento = new AuthenticatedEndpoint(this, 'ConsultaReportesTopFacturasDocumento', {
+      api,
+      authorizer,
+      resource: reportesTopFacturasDocumento,
+      method: 'GET',
+      entry: entryTopFacturasDocumentoDe('consulta-reportes'),
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: DEPS_LOCK_FILE_PATH,
+      requiredScope: 'fuelhub-api/cierres.read', // mismo scope que día/turno/compras-semanal
+      environment: {
+        REPORTES_BUCKET_NAME: reportesDocumentosBucket.bucketName,
+      },
+    });
+
+    reportesDocumentosBucket.grantRead(consultaReportesTopFacturasDocumento.fn);
 
     // --- ingestCompraCorreo: Lambda por cron (v1.81, sin ruta de API) ----------
     // Lee facturas de proveedores de un buzón de Gmail (etiqueta

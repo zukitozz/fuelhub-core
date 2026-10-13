@@ -2,6 +2,7 @@
 import { RegistrarReporteTopFacturas } from './RegistrarReporteTopFacturas';
 import type { EstacionLookupRepository } from '../ports/EstacionLookupRepository';
 import type { ReporteTopFacturasStorageRepository, ReporteTopFacturasGuardadoDTO } from '../ports/ReporteTopFacturasStorageRepository';
+import type { ReporteTopFacturasRendererPort } from '../ports/ReporteTopFacturasRendererPort';
 import type { EventPublisherPort, ReporteTopFacturasRegistradoEvent } from '../ports/EventPublisherPort';
 import { AccesoDenegadoEstacionError, RecursoNoEncontradoError, type AuthContext } from '@fuelhub/shared-kernel';
 import type { ClienteTopFacturasInput, ReporteTopFacturasInput } from '../../domain/ReporteTopFacturasInput';
@@ -39,11 +40,25 @@ class EstacionesFake implements EstacionLookupRepository {
   }
 }
 
-class RepoFake implements ReporteTopFacturasStorageRepository {
+class RendererFake implements ReporteTopFacturasRendererPort {
   readonly llamadas: Array<{ codigoEstacion: string; semanaInicio: string; top: readonly ClienteTopFacturasInput[] }> = [];
-  async guardar(params: { codigoEstacion: string; semanaInicio: string; top: readonly ClienteTopFacturasInput[] }): Promise<ReporteTopFacturasGuardadoDTO> {
+  async renderizarExcel(params: { codigoEstacion: string; semanaInicio: string; top: readonly ClienteTopFacturasInput[] }): Promise<Buffer> {
     this.llamadas.push(params);
-    return { key: `top-facturas/reporte_top_facturas_${params.codigoEstacion}_${params.semanaInicio}.json` };
+    return Buffer.from('excel-fake');
+  }
+}
+
+class RepoFake implements ReporteTopFacturasStorageRepository {
+  readonly llamadas: Array<{ codigoEstacion: string; semanaInicio: string; top: readonly ClienteTopFacturasInput[]; excelBuffer: Buffer }> = [];
+  async guardar(params: {
+    codigoEstacion: string;
+    semanaInicio: string;
+    top: readonly ClienteTopFacturasInput[];
+    excelBuffer: Buffer;
+  }): Promise<ReporteTopFacturasGuardadoDTO> {
+    this.llamadas.push(params);
+    const base = `top-facturas/reporte_top_facturas_${params.codigoEstacion}_${params.semanaInicio}`;
+    return { key: `${base}.json`, keyExcel: `${base}.xlsx` };
   }
 }
 
@@ -57,40 +72,49 @@ class EventosFake implements EventPublisherPort {
 }
 
 describe('RegistrarReporteTopFacturas', () => {
-  it('lanza AccesoDenegadoEstacionError cuando el token no tiene acceso a la estacion, sin guardar ni publicar', async () => {
+  it('lanza AccesoDenegadoEstacionError cuando el token no tiene acceso a la estacion, sin renderizar/guardar/publicar', async () => {
     const estaciones = new EstacionesFake();
+    const renderer = new RendererFake();
     const repo = new RepoFake();
     const eventos = new EventosFake();
-    const caso = new RegistrarReporteTopFacturas(estaciones, repo, eventos);
+    const caso = new RegistrarReporteTopFacturas(estaciones, renderer, repo, eventos);
 
     await expect(caso.ejecutar(authDe('MALA'), inputValido({ codigoEstacion: 'CHANCAYLLO' }))).rejects.toThrow(
       AccesoDenegadoEstacionError
     );
+    expect(renderer.llamadas).toHaveLength(0);
     expect(repo.llamadas).toHaveLength(0);
     expect(eventos.llamadas).toHaveLength(0);
   });
 
-  it('lanza RecursoNoEncontradoError cuando la estacion no existe/no esta activa, sin guardar ni publicar', async () => {
+  it('lanza RecursoNoEncontradoError cuando la estacion no existe/no esta activa, sin renderizar/guardar/publicar', async () => {
     const estaciones = new EstacionesFake({});
+    const renderer = new RendererFake();
     const repo = new RepoFake();
     const eventos = new EventosFake();
-    const caso = new RegistrarReporteTopFacturas(estaciones, repo, eventos);
+    const caso = new RegistrarReporteTopFacturas(estaciones, renderer, repo, eventos);
 
     await expect(caso.ejecutar(authDe('*'), inputValido())).rejects.toThrow(RecursoNoEncontradoError);
+    expect(renderer.llamadas).toHaveLength(0);
     expect(repo.llamadas).toHaveLength(0);
     expect(eventos.llamadas).toHaveLength(0);
   });
 
-  it('con payload valido, guarda en el repo y publica el evento con el resumen por cliente', async () => {
+  it('con payload valido, renderiza el Excel, guarda en el repo y publica el evento con el resumen por cliente', async () => {
     const estaciones = new EstacionesFake();
+    const renderer = new RendererFake();
     const repo = new RepoFake();
     const eventos = new EventosFake();
-    const caso = new RegistrarReporteTopFacturas(estaciones, repo, eventos);
+    const caso = new RegistrarReporteTopFacturas(estaciones, renderer, repo, eventos);
 
     const resultado = await caso.ejecutar(authDe('*'), inputValido());
 
+    expect(renderer.llamadas).toHaveLength(1);
+    expect(renderer.llamadas[0]?.top[0]?.facturas).toHaveLength(2);
+
     expect(repo.llamadas).toHaveLength(1);
     expect(repo.llamadas[0]?.top[0]?.facturas).toHaveLength(2);
+    expect(repo.llamadas[0]?.excelBuffer.toString('utf-8')).toBe('excel-fake');
 
     expect(eventos.llamadas).toHaveLength(1);
     expect(eventos.llamadas[0]).toEqual({
@@ -120,9 +144,10 @@ describe('RegistrarReporteTopFacturas', () => {
 
   it('deduplica despachadores repetidos y cuenta distintos despachadores del mismo cliente', async () => {
     const estaciones = new EstacionesFake();
+    const renderer = new RendererFake();
     const repo = new RepoFake();
     const eventos = new EventosFake();
-    const caso = new RegistrarReporteTopFacturas(estaciones, repo, eventos);
+    const caso = new RegistrarReporteTopFacturas(estaciones, renderer, repo, eventos);
 
     await caso.ejecutar(
       authDe('*'),
@@ -146,10 +171,11 @@ describe('RegistrarReporteTopFacturas', () => {
 
   it('best effort: si falla la publicacion del evento, no propaga el error y el reporte ya quedo guardado', async () => {
     const estaciones = new EstacionesFake();
+    const renderer = new RendererFake();
     const repo = new RepoFake();
     const eventos = new EventosFake();
     eventos.fallar = true;
-    const caso = new RegistrarReporteTopFacturas(estaciones, repo, eventos);
+    const caso = new RegistrarReporteTopFacturas(estaciones, renderer, repo, eventos);
 
     const resultado = await caso.ejecutar(authDe('*'), inputValido());
 
@@ -159,9 +185,10 @@ describe('RegistrarReporteTopFacturas', () => {
 
   it('token con acceso wildcard (*) pasa la autorizacion', async () => {
     const estaciones = new EstacionesFake();
+    const renderer = new RendererFake();
     const repo = new RepoFake();
     const eventos = new EventosFake();
-    const caso = new RegistrarReporteTopFacturas(estaciones, repo, eventos);
+    const caso = new RegistrarReporteTopFacturas(estaciones, renderer, repo, eventos);
 
     await expect(caso.ejecutar(authDe('*'), inputValido())).resolves.toBeDefined();
   });

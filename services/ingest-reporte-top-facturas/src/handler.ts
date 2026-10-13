@@ -21,6 +21,7 @@ import { fuenteEventBridgePara, type Ambiente } from '@fuelhub/shared-kernel';
 import { RegistrarReporteTopFacturas } from './application/use-cases/RegistrarReporteTopFacturas';
 import { PostgresEstacionLookupRepository, type AuroraDataApiConfig } from './infrastructure/adapters/PostgresEstacionLookupRepository';
 import { S3ReporteTopFacturasStorageRepository } from './infrastructure/adapters/S3ReporteTopFacturasStorageRepository';
+import { ExcelReporteTopFacturasRenderer } from './infrastructure/adapters/ExcelReporteTopFacturasRenderer';
 import { EventBridgeReporteTopFacturasPublisher } from './infrastructure/adapters/EventBridgeReporteTopFacturasPublisher';
 import { parsearReporteTopFacturasInput, type ApiGatewayEventLike } from './infrastructure/http/ApiGatewayRequestMapper';
 
@@ -35,6 +36,7 @@ const estaciones = new PostgresEstacionLookupRepository(rdsClient, config);
 
 const s3Client = new S3Client({});
 const repo = new S3ReporteTopFacturasStorageRepository(s3Client, requiredEnv('REPORTES_BUCKET_NAME'));
+const renderer = new ExcelReporteTopFacturasRenderer();
 
 const eventBridgeClient = new EventBridgeClient({});
 const publicadorEventos = new EventBridgeReporteTopFacturasPublisher(
@@ -43,7 +45,7 @@ const publicadorEventos = new EventBridgeReporteTopFacturasPublisher(
   fuenteEventBridgePara(requiredEnv('AMBIENTE') as Ambiente)
 );
 
-const registrarReporteTopFacturas = new RegistrarReporteTopFacturas(estaciones, repo, publicadorEventos);
+const registrarReporteTopFacturas = new RegistrarReporteTopFacturas(estaciones, renderer, repo, publicadorEventos);
 
 const persistenceStore = new DynamoDBPersistenceLayer({ tableName: requiredEnv('IDEMPOTENCY_TABLE_NAME') });
 const idempotencyConfig = new IdempotencyConfig({

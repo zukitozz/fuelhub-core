@@ -1868,6 +1868,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /reportes/top-facturas/documento:
+    get:
+      tags: [reportes]
+      summary: Excel del reporte semanal de top-facturas como documento descargable (uso M2M, notificaciones por WhatsApp)
+      description: >
+        v1.89 — botón "Ver reporte" de notificaciones-whatsapp para
+        `ReporteTopFacturasRegistrado`, mismo criterio que
+        /reportes/dia/documento, /reportes/turno/documento y
+        /reportes/compras-semanal/documento: el Excel ya fue generado y
+        subido a S3 por `ingest-reporte-top-facturas` (otro microservicio,
+        en el mismo POST que recibió el reporte de `fuelhub-local`) — este
+        endpoint solo resuelve la key estable y devuelve una URL firmada, sin
+        tocar Postgres. `estacionCodigo` y `semanaInicio` son los mismos
+        valores que ya trae el evento `ReporteTopFacturasRegistrado`
+        (`estacionCodigo`, `semanaInicio`).
+      operationId: obtenerReporteTopFacturasDocumento
+      x-required-scope: fuelhub-api/cierres.read
+      parameters:
+        - name: estacionCodigo
+          in: query
+          required: true
+          description: Código de la estación — obligatorio, este reporte no tiene modo consolidado.
+          schema:
+            type: string
+          example: "CHANCAYLLO"
+        - name: semanaInicio
+          in: query
+          required: true
+          description: Lunes de la semana (YYYY-MM-DD) — el mismo valor que trae el evento `ReporteTopFacturasRegistrado`.
+          schema:
+            type: string
+            format: date
+          example: "2026-10-06"
+      responses:
+        '200':
+          description: URL firmada al Excel pre-generado de esa estación/semana.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporteComprasSemanalDocumento'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe ningún reporte generado para esa estación/semana.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /reportes/margen:
     get:
       tags: [reportes]

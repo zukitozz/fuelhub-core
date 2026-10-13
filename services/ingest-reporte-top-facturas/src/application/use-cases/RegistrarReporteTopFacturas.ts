@@ -15,15 +15,20 @@
 // duplicaría la notificación de WhatsApp -- el mismo problema que
 // ingest-comprobante-pdf NO tiene (ese Lambda no publica eventos).
 //
-// Sin Lambda de lectura todavía (a propósito, scope de esta entrega): el
-// JSON guardado en S3 es el registro completo para una futura consulta
-// manual o un endpoint GET que se agregue más adelante -- no se construye
-// ahora porque no fue pedido.
+// v1.89 -- genera el Excel descargable en el mismo request (no hace falta
+// un Lambda aparte disparado por evento, como sí necesitan día/turno: el
+// payload de fuelhub-local ya trae todo el detalle, no hay que ir a buscar
+// nada a Aurora). GET /reportes/top-facturas/documento (consulta-reportes)
+// sirve ese Excel vía URL firmada -- mismo patrón que día/turno/
+// compras-semanal (ver comentario de Jorge: notificaciones-whatsapp no
+// debería tener que armar su propio reporte a partir del resumen del
+// evento).
 
 import { AccesoDenegadoEstacionError, RecursoNoEncontradoError, hasAccessToStation, type AuthContext } from '@fuelhub/shared-kernel';
 import { validarReporteTopFacturas, type ReporteTopFacturasInput } from '../../domain/ReporteTopFacturasInput';
 import type { EstacionLookupRepository } from '../ports/EstacionLookupRepository';
 import type { ReporteTopFacturasStorageRepository } from '../ports/ReporteTopFacturasStorageRepository';
+import type { ReporteTopFacturasRendererPort } from '../ports/ReporteTopFacturasRendererPort';
 import type { ClienteTopFacturasEvento, EventPublisherPort } from '../ports/EventPublisherPort';
 
 const PROYECTO_CODIGO = 'FUELHUBCLOUD'; // mismo valor que RegistrarCierreDia.ts/RegistrarCierreTurno.ts -- confirmado v1.57
@@ -38,6 +43,7 @@ export interface ReporteTopFacturasRegistradoResultado {
 export class RegistrarReporteTopFacturas {
   constructor(
     private readonly estaciones: EstacionLookupRepository,
+    private readonly renderer: ReporteTopFacturasRendererPort,
     private readonly repo: ReporteTopFacturasStorageRepository,
     private readonly eventos: EventPublisherPort
   ) {}
@@ -56,10 +62,17 @@ export class RegistrarReporteTopFacturas {
       throw new RecursoNoEncontradoError('estación', input.codigoEstacion);
     }
 
+    const excelBuffer = await this.renderer.renderizarExcel({
+      codigoEstacion: input.codigoEstacion,
+      semanaInicio: input.semanaInicio,
+      top: input.top,
+    });
+
     const { key } = await this.repo.guardar({
       codigoEstacion: input.codigoEstacion,
       semanaInicio: input.semanaInicio,
       top: input.top,
+      excelBuffer,
     });
 
     try {
